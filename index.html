@@ -1291,6 +1291,13 @@ const PROVIDERS = {
     }),
     body: (model, system, text, images) => ({
       model: model,
+      max_tokens: 8000,
+      // Several free models (gpt-oss, DeepSeek, Qwen-thinking) reason silently
+      // before answering. Left uncapped, the entire token budget can go to
+      // that internal reasoning, leaving finish_reason "length" and an empty
+      // content field. Biasing effort down leaves room for the actual shader.
+      // Non-reasoning models on OpenRouter simply ignore this field.
+      reasoning: { effort: 'low' },
       messages: [
         { role:'system', content: system },
         { role:'user', content: [{ type:'text', text: text }].concat(
@@ -1298,9 +1305,23 @@ const PROVIDERS = {
               image_url:{ url:'data:' + im.mime + ';base64,' + im.b64 } }))) }
       ]
     }),
-    extract: d => (d && d.choices && d.choices[0] && d.choices[0].message
-      && d.choices[0].message.content) || '',
-    stop: d => d && d.choices && d.choices[0] && d.choices[0].finish_reason,
+    extract: d => {
+      const msg = d && d.choices && d.choices[0] && d.choices[0].message;
+      if(!msg) return '';
+      // Some providers put the whole answer in `content`. Others — mid-reasoning
+      // truncation especially — leave content empty and put everything in the
+      // reasoning trace instead. extractShader() downstream can pull real GLSL
+      // out of a messy reasoning dump just as well as out of prose, so fall
+      // back to it rather than surfacing an empty-response error.
+      return msg.content || msg.reasoning || msg.reasoning_content || '';
+    },
+    stop: d => {
+      const c = d && d.choices && d.choices[0];
+      if(!c) return '';
+      return c.finish_reason === 'length'
+        ? 'length — נגמר תקציב הטוקנים, כנראה תוך כדי חשיבה פנימית'
+        : c.finish_reason;
+    },
     freeList: 'https://openrouter.ai/api/v1/models'
   },
 
@@ -1613,6 +1634,10 @@ function hintFor(msg){
   if(/rate limit|too many requests/i.test(m)){
     return 'חרגת ממגבלת הקצב. חכה דקה ונסה שוב.';
   }
+  if(/no code returned|לא הוחזר קוד/i.test(m) || /reasoning budget|length —/i.test(m)){
+    return 'המודל הזה "חושב" הרבה לפני שהוא עונה, ולפעמים לא נשאר לו מקום לקוד עצמו. '
+         + 'נסה שוב — זה לא תמיד קורה — או עבור למודל אחר ברשימה, למשל Qwen3 Coder.';
+  }
   return '';
 }
 
@@ -1753,7 +1778,9 @@ async function askModel(userText, signal, onRetry){
     if(res.ok){
       const text = P.extract(data);
       if(!text || !text.trim()){
-        throw new Error('לא הוחזר קוד (' + (P.stop(data) || 'סיבה לא ידועה') + ').');
+        const why = P.stop(data) || 'סיבה לא ידועה';
+        const hint = hintFor('no code returned: ' + why);
+        throw new Error('לא הוחזר קוד (' + why + ').' + (hint ? '\n\n' + hint : ''));
       }
       return extractShader(text);
     }
