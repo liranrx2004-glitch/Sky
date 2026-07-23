@@ -1,0 +1,2376 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+<title>Sky Shader Viewer</title>
+
+<!-- PWA manifest -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#080b18">
+
+<!-- iOS home-screen app behavior -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sky Viewer">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="apple-touch-icon" sizes="120x120" href="icon-120.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icon-152.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icon-167.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<style>
+  :root{
+    /* Sampled top-to-bottom off a dusk sky: zenith, upper air, haze band,
+       then the two warm bands at the horizon. */
+    --night:    #080b18;
+    --dusk:     #131a33;
+    --haze:     #202a4d;
+    --horizon:  #ff9e5e;
+    --ember:    #e4645f;
+    --star:     #a8b6f0;
+    --paper:    #e9ecf9;
+    --dim:      #7d88ae;
+    --err:      #ff7b86;
+    --sky-line: linear-gradient(90deg, var(--ember), var(--horizon) 42%, #9d7cf0);
+    --mono: ui-monospace, 'SF Mono', 'Menlo', 'Consolas', monospace;
+    --sheet-h: 58vh;
+    --tap: 44px;
+  }
+  *{ box-sizing:border-box; }
+  html, body{
+    margin:0; height:100%; background:var(--night); color:var(--paper);
+    font-family:-apple-system,'SF Pro Text','Segoe UI',Arial,sans-serif;
+    font-size:15px; letter-spacing:-0.01em;
+    overflow:hidden; -webkit-text-size-adjust:100%;
+    -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #app{ height:100vh; height:100dvh; width:100vw; }
+
+  /* ---------- canvas fills the screen; everything else floats over it ---------- */
+  #canvas-wrap{ position:fixed; inset:0; background:#000; z-index:0; }
+  canvas#glcanvas{ width:100%; height:100%; display:block; }
+  #empty-state{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:12px; text-align:center; padding:30px 34px 45vh; pointer-events:none;
+  }
+  #empty-state h2{ font-size:22px; margin:0; font-weight:650; letter-spacing:-.5px; }
+  #empty-state p{ font-size:14.5px; color:var(--dim); margin:0; max-width:330px; line-height:1.7; }
+  #hint{
+    position:absolute; top:calc(env(safe-area-inset-top) + 62px); left:50%; transform:translateX(-50%);
+    font-size:12px; color:rgba(223,227,242,.55); font-family:var(--mono);
+    background:rgba(8,11,24,.55); padding:5px 11px; border-radius:20px;
+    backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); white-space:nowrap;
+  }
+
+  /* ---------- floating header ---------- */
+  header{
+    position:fixed; z-index:3; top:0; left:0; right:0;
+    padding:calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 16px) 14px calc(env(safe-area-inset-left) + 16px);
+    display:flex; align-items:center; gap:12px;
+    background:linear-gradient(180deg, rgba(8,11,24,.92) 0%, rgba(8,11,24,.55) 58%, transparent 100%);
+    pointer-events:none;
+  }
+  header > *{ pointer-events:auto; }
+  .title-block{ flex:1; min-width:0; }
+  .title-block h1{ margin:0; font-size:17px; font-weight:650; letter-spacing:-.45px; }
+  .title-block p{
+    margin:3px 0 0; font-size:11px; color:var(--dim); font-family:var(--mono);
+    letter-spacing:.02em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .status{ display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--dim);
+    font-family:var(--mono); letter-spacing:.02em; }
+  .dot{ width:8px; height:8px; border-radius:50%; background:#3a3a48; flex-shrink:0; }
+  .dot.ok{ background:var(--horizon); box-shadow:0 0 9px rgba(255,158,94,.7); }
+  .dot.err{ background:var(--err); box-shadow:0 0 8px var(--err); }
+  #star{
+    width:var(--tap); height:var(--tap); flex-shrink:0; border-radius:14px;
+    border:1px solid rgba(168,182,240,.18); background:rgba(19,26,51,.55);
+    backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+    color:var(--dim); font-size:19px; line-height:1; cursor:pointer; transition:.16s;
+  }
+  #star:hover{ color:var(--horizon); border-color:rgba(255,158,94,.45); }
+  #star.saved{ color:var(--horizon); border-color:var(--horizon); background:rgba(255,158,94,.16); }
+
+  /* ---------- bottom sheet ---------- */
+  #sheet{
+    position:fixed; z-index:4; left:0; right:0; bottom:0; height:var(--sheet-h);
+    display:flex; flex-direction:column;
+    background:linear-gradient(180deg, rgba(19,26,51,.90), rgba(9,12,26,.94));
+    backdrop-filter:blur(28px) saturate(170%); -webkit-backdrop-filter:blur(28px) saturate(170%);
+    border-radius:24px 24px 0 0;
+    box-shadow:0 -16px 44px rgba(0,0,0,.55);
+  }
+  /* The signature: the horizon, drawn where the sky meets the instruments. */
+  #sheet::before{
+    content:''; position:absolute; top:0; left:0; right:0; height:1.5px;
+    background:var(--sky-line); border-radius:24px 24px 0 0;
+  }
+  #sheet.dragging{ transition:none; }
+  #grab{ position:relative; height:30px; display:flex; align-items:center; justify-content:center; flex-shrink:0; cursor:grab; touch-action:none; }
+  #hide-chrome{
+    position:absolute; left:8px; top:50%; transform:translateY(-50%);
+    width:38px; height:30px; border:none; background:transparent; color:var(--dim);
+    font-size:17px; line-height:1; cursor:pointer; padding:0; border-radius:8px;
+  }
+  #hide-chrome:hover{ color:var(--paper); background:rgba(255,255,255,.07); }
+
+  /* focus mode: nothing but sky */
+  #show-chrome{
+    position:fixed; z-index:6; bottom:calc(env(safe-area-inset-bottom) + 18px);
+    left:50%; transform:translateX(-50%) translateY(20px);
+    min-height:40px; padding:0 18px; border-radius:22px;
+    border:1px solid rgba(255,255,255,.16); background:rgba(12,14,26,.62);
+    backdrop-filter:blur(16px) saturate(160%); -webkit-backdrop-filter:blur(16px) saturate(160%);
+    color:var(--paper); font-family:inherit; font-size:14px; cursor:pointer;
+    opacity:0; pointer-events:none; transition:opacity .22s, transform .22s;
+  }
+  #app.chrome-hidden #show-chrome{ opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
+  #app.chrome-hidden header{ opacity:0; pointer-events:none; }
+  #app.chrome-hidden #sheet{ transform:translateY(102%); }
+  #app.chrome-hidden #hint{ opacity:0; }
+  header, #hint{ transition:opacity .24s; }
+  #sheet{ transition:height .28s cubic-bezier(.32,.72,0,1), transform .3s cubic-bezier(.32,.72,0,1); }
+  #grab span{ width:38px; height:5px; border-radius:3px; background:rgba(255,255,255,.22); }
+  #grab:active{ cursor:grabbing; }
+
+  #segs{
+    display:flex; gap:3px; flex-shrink:0; margin:0 12px 12px; padding:4px;
+    background:rgba(8,11,24,.55); border:1px solid rgba(168,182,240,.10); border-radius:14px;
+  }
+  .seg{
+    flex:1; min-width:0; height:42px; border:none; border-radius:10px; background:transparent;
+    color:var(--dim); font-size:11px; font-family:var(--mono); letter-spacing:.02em;
+    cursor:pointer; transition:.16s; padding:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  }
+  .seg svg{ width:17px; height:17px; stroke:currentColor; fill:none;
+    stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+  .seg.active{ background:rgba(168,182,240,.13); color:var(--paper); }
+  .seg.active svg{ stroke:var(--horizon); }
+
+  #sheet-body{
+    flex:1; min-height:0; overflow-y:auto; overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+    padding:0 calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 22px) calc(env(safe-area-inset-left) + 16px);
+  }
+  .panel-section{ display:none; }
+  .panel-section.active{ display:block; }
+  .group + .group{ margin-top:22px; }
+  .group h2{
+    font-size:10.5px; text-transform:uppercase; letter-spacing:1.5px;
+    color:var(--dim); margin:0 0 12px; font-weight:500; font-family:var(--mono);
+  }
+
+  /* ---------- controls ---------- */
+  .dropzone{
+    border:1.5px dashed var(--haze); border-radius:12px; padding:22px 14px;
+    text-align:center; cursor:pointer; transition:.15s; font-size:14px; color:var(--dim);
+  }
+  .dropzone:hover, .dropzone.drag{ border-color:var(--ember); color:var(--ember); background:rgba(255,107,138,.06); }
+  .dropzone .fname{ color:var(--paper); font-family:var(--mono); font-size:12px; margin-top:6px; word-break:break-all; }
+  input[type="file"]{ display:none; }
+
+  textarea{
+    width:100%; min-height:96px; resize:vertical; background:rgba(0,0,0,.32);
+    border:1px solid var(--haze); border-radius:11px; color:var(--paper);
+    font-family:var(--mono); font-size:16px; padding:11px; line-height:1.55;
+    -webkit-user-select:text; user-select:text;
+  }
+  #paste-fsh{ font-size:16px; min-height:150px; }
+  textarea:focus{ outline:none; border-color:var(--ember); }
+
+  .tabbtns{ display:flex; gap:6px; margin-bottom:11px; }
+  .tabbtn{
+    flex:1; height:var(--tap); font-size:14px; border-radius:10px; border:1px solid var(--haze);
+    background:transparent; color:var(--dim); cursor:pointer; font-family:inherit;
+  }
+  .tabbtn.active{ background:var(--haze); color:var(--paper); }
+
+  button.action{
+    width:100%; min-height:var(--tap); padding:11px; border-radius:12px;
+    border:1px solid var(--haze); background:rgba(32,42,77,.35); color:var(--paper);
+    font-size:14.5px; cursor:pointer; margin-top:9px; font-family:inherit;
+  }
+  button.action:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
+  button.primary{
+    background:var(--sky-line); border:none; color:#1a1020;
+    font-weight:650; letter-spacing:-.2px;
+  }
+  button.primary:hover{ filter:brightness(1.08); color:#1a1020; }
+  button.danger:hover{ border-color:var(--err); color:var(--err); }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+
+  .row{ display:flex; flex-direction:column; gap:8px; margin-bottom:18px; }
+  .row label{ font-size:14px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .row label span.val{ font-family:var(--mono); color:var(--horizon); font-size:13px; letter-spacing:.02em; }
+  input[type="range"]{
+    -webkit-appearance:none; appearance:none; width:100%; height:5px; border-radius:3px;
+    background:var(--haze); margin:8px 0;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:26px; height:26px; border-radius:50%;
+    background:var(--horizon); cursor:pointer;
+    box-shadow:0 1px 6px rgba(0,0,0,.55), 0 0 0 1px rgba(255,158,94,.3);
+  }
+  .checkrow{ display:flex; align-items:center; justify-content:space-between; font-size:14px; min-height:var(--tap); }
+  input[type="checkbox"]{ accent-color:var(--ember); width:22px; height:22px; }
+
+  #err-box{
+    display:none; padding:11px; border-radius:11px; background:rgba(255,107,122,.09);
+    border:1px solid rgba(255,107,122,.35); color:#ffb0b8; font-size:12px; font-family:var(--mono);
+    white-space:pre-wrap; max-height:200px; overflow-y:auto; margin-top:12px;
+    -webkit-user-select:text; user-select:text;
+  }
+  .divider{ height:1px; background:var(--haze); margin:18px 0; }
+  .small-note{ font-size:12px; color:var(--dim); line-height:1.6; }
+  ::-webkit-scrollbar{ width:8px; } ::-webkit-scrollbar-thumb{ background:var(--haze); border-radius:4px; }
+  :focus-visible{ outline:2px solid var(--horizon); outline-offset:2px; }
+
+  /* ---------- AI panel ---------- */
+  #ai-prompt{ min-height:80px; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 0; }
+  .chip{
+    font-size:13px; padding:8px 12px; border-radius:20px; border:1px solid var(--haze);
+    background:transparent; color:var(--dim); cursor:pointer; font-family:inherit; text-align:right;
+  }
+  .chip{ line-height:1.35; }
+  .chip:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
+  .btn-row{ display:flex; gap:8px; margin-top:9px; }
+  .btn-row button.action{ margin-top:0; }
+  #ai-log{
+    font-size:13px; font-family:var(--mono); color:var(--dim); margin-top:12px;
+    min-height:17px; display:flex; align-items:flex-start; gap:7px; line-height:1.55;
+    white-space:pre-wrap;              /* hints arrive as their own paragraph */
+    -webkit-user-select:text; user-select:text;   /* errors are worth copying */
+  }
+  #ai-log.busy{ color:var(--horizon); }
+  #ai-log.bad{ color:var(--err); }
+  .spin{
+    width:11px; height:11px; border-radius:50%; margin-top:3px; flex-shrink:0;
+    border:1.5px solid var(--haze); border-top-color:var(--horizon);
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce){
+    .spin{ animation-duration:2.4s; }
+    #sheet{ transition:none; }
+  }
+
+  /* ---------- reference images ---------- */
+  .thumbs{ display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .thumb{ position:relative; width:64px; height:64px; border-radius:10px; overflow:hidden; border:1px solid var(--haze); }
+  .thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
+  .thumb button{
+    position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%;
+    border:none; background:rgba(0,0,0,.68); color:#fff; font-size:14px; line-height:1;
+    cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;
+  }
+
+  /* ---------- settings fields ---------- */
+  details.settings{ margin-top:16px; border-top:1px solid var(--haze); padding-top:12px; }
+  details.settings summary{
+    font-size:14px; color:var(--dim); cursor:pointer; list-style:none; min-height:26px;
+  }
+  details.settings summary::-webkit-details-marker{ display:none; }
+  details.settings summary::before{ content:'⚙︎ '; }
+  details.settings summary:hover{ color:var(--paper); }
+  .field{ margin-top:12px; }
+  .field > label{ display:block; font-size:13px; color:var(--dim); margin-bottom:6px; }
+  .field input[type="text"], .field input[type="password"], .field select{
+    width:100%; min-height:var(--tap); background:rgba(0,0,0,.32); border:1px solid var(--haze);
+    border-radius:11px; color:var(--paper); font-family:var(--mono); font-size:16px; padding:10px;
+    -webkit-user-select:text; user-select:text;
+  }
+  .field select{ font-family:inherit; appearance:none; -webkit-appearance:none;
+    background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);
+    background-position:14px calc(50% - 2px),19px calc(50% - 2px); background-size:5px 5px; background-repeat:no-repeat; }
+  .field input:focus, .field select:focus{ outline:none; border-color:var(--ember); }
+  .keyrow{ display:flex; gap:8px; }
+  .keyrow > input, .keyrow > select{ flex:1; min-width:0; }
+  .keyrow > button{
+    flex-shrink:0; min-height:var(--tap); padding:0 14px; border-radius:11px;
+    border:1px solid var(--haze); background:transparent; color:var(--dim);
+    font-size:14px; cursor:pointer; font-family:inherit;
+  }
+  .keyrow > button:hover{ border-color:var(--ember); color:var(--ember); }
+
+  /* ---------- saved collection ---------- */
+  .lib-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:11px; margin-top:12px; }
+  .lib-card{ border:1px solid var(--haze); border-radius:14px; overflow:hidden;
+    background:rgba(8,11,24,.5); transition:border-color .16s; }
+  .lib-card:hover{ border-color:rgba(255,158,94,.35); }
+  .lib-card .shot{ width:100%; aspect-ratio:8/5; object-fit:cover; display:block; background:#000; cursor:pointer; }
+  .lib-card .meta{ padding:8px 9px 9px; }
+  .lib-card .nm{
+    font-size:13px; line-height:1.35; margin:0 0 7px; max-height:36px; overflow:hidden;
+    -webkit-user-select:text; user-select:text;
+  }
+  .lib-card .acts{ display:flex; gap:5px; }
+  .lib-card .acts button{
+    flex:1; min-height:32px; border-radius:8px; border:1px solid var(--haze);
+    background:transparent; color:var(--dim); font-size:12px; cursor:pointer; font-family:inherit; padding:0;
+  }
+  .lib-card .acts button:hover{ border-color:var(--ember); color:var(--ember); }
+  .lib-card .acts button.del:hover{ border-color:var(--err); color:var(--err); }
+  .empty-note{ font-size:13.5px; color:var(--dim); line-height:1.6; margin:14px 0 0; }
+
+  /* ---------- desktop ---------- */
+  @media (min-width:761px){
+    #app{ display:grid; grid-template-columns:1fr 372px; grid-template-rows:auto 1fr; height:100dvh; }
+    header{
+      position:static; grid-column:1 / -1; grid-row:1; background:none;
+      border-bottom:1px solid var(--haze); padding:14px 20px;
+    }
+    #canvas-wrap{ position:relative; inset:auto; grid-column:1; grid-row:2; }
+    #hint{ top:auto; bottom:16px; left:auto; right:16px; transform:none; }
+    #empty-state{ padding:30px; }
+    #sheet{
+      position:static; grid-column:2; grid-row:2; height:auto; border-radius:0;
+      border-top:none; border-right:1px solid var(--haze); box-shadow:none;
+      background:var(--dusk); backdrop-filter:none; -webkit-backdrop-filter:none;
+    }
+    #grab, #segs{ display:none; }
+    #app.chrome-hidden{ grid-template-columns:1fr 0; }
+    #app.chrome-hidden #sheet{ transform:none; overflow:hidden; border:none; }
+    #app.chrome-hidden header{ display:none; }
+    #app.chrome-hidden #canvas-wrap{ grid-row:1 / -1; }
+    #sheet-body{ padding:18px 18px 26px; }
+    .panel-section{ display:block; }
+    .panel-section + .panel-section{ margin-top:22px; padding-top:22px; border-top:1px solid var(--haze); }
+    .lib-grid{ grid-template-columns:repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvas-wrap">
+    <canvas id="glcanvas"></canvas>
+    <div id="empty-state">
+      <h2>השמיים ריקים</h2>
+      <p>תאר שמיים ותן ל-AI לכתוב אותם, או גרור לכאן sky.fsh קיים. מה שייצא יתפוס את כל המסך, בדיוק כפי שייראה במשחק.</p>
+    </div>
+    <div id="hint">גרור לסובב · צבוט לזום</div>
+  </div>
+
+  <header>
+    <div class="title-block">
+      <h1>Sky Shader Viewer</h1>
+      <p>sky.fsh על כיפה מלאה</p>
+    </div>
+    <div class="status">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">אין שיידר</span>
+    </div>
+    <button id="star" title="שמור לאוסף" aria-label="שמור לאוסף">☆</button>
+  </header>
+
+  <aside id="sheet">
+    <div id="grab"><span></span>
+      <button id="hide-chrome" title="הסתר תפריט" aria-label="הסתר תפריט">⌄</button>
+    </div>
+    <nav id="segs">
+      <button class="seg active" data-sec="sec-ai">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l1.7 5.3 5.3 1.7-5.3 1.7L12 17.5l-1.7-5.3L5 10.5l5.3-1.7z"/><path d="M18.5 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/></svg>
+        <span>צור</span>
+      </button>
+      <button class="seg" data-sec="sec-lib">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.2l8.5 4.6-8.5 4.6-8.5-4.6z"/><path d="M3.5 12.2l8.5 4.6 8.5-4.6"/><path d="M3.5 16.6l8.5 4.6 8.5-4.6"/></svg>
+        <span>אוסף</span>
+      </button>
+      <button class="seg" data-sec="sec-code">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5L3.8 12 9 17.5"/><path d="M15 6.5L20.2 12 15 17.5"/></svg>
+        <span>קוד</span>
+      </button>
+      <button class="seg" data-sec="sec-view">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9"/><circle cx="15" cy="7.5" r="2.1"/><circle cx="9" cy="16.5" r="2.1"/></svg>
+        <span>תצוגה</span>
+      </button>
+    </nav>
+
+    <div id="sheet-body">
+
+      <!-- ============ צור ============ -->
+      <section class="panel-section active" id="sec-ai">
+        <div class="group">
+          <h2>יצירת שיידר עם AI</h2>
+          <textarea id="ai-prompt" placeholder="תאר את השמיים: שעה ביום, צבעים, עננים, כוכבים, אפקטים…"></textarea>
+          <div class="chips" id="ai-chips">
+            <button type="button" class="chip">שקיעה כתומה־ורודה עם עננים נעים</button>
+            <button type="button" class="chip">לילה עם כוכבים מנצנצים ושביל החלב</button>
+            <button type="button" class="chip">זוהר צפוני ירוק־סגול מעל האופק</button>
+            <button type="button" class="chip">סופה סגולה עם הבזקי ברק</button>
+            <button type="button" class="chip">כוכב לכת ענק עם טבעות באופק</button>
+          </div>
+
+          <button class="action" id="ai-add-img">➕ הוסף תמונת השראה</button>
+          <input type="file" id="ai-img-input" accept="image/*" multiple>
+          <div class="thumbs" id="ai-thumbs"></div>
+
+          <div class="btn-row">
+            <button class="action primary" id="ai-new">צור שיידר</button>
+            <button class="action" id="ai-edit">שנה את הקיים</button>
+          </div>
+          <button class="action" id="ai-cancel" style="display:none;">בטל בקשה</button>
+          <div id="ai-log"></div>
+          <button class="action" id="ai-fix" style="display:none;">שלח את שגיאת הקימפול לתיקון</button>
+
+          <details class="settings">
+            <summary>הגדרות מנוע ה-AI</summary>
+            <div class="field">
+              <label for="ai-provider">ספק</label>
+              <select id="ai-provider">
+                <option value="openrouter">OpenRouter · מודלים חינמיים</option>
+                <option value="anthropic">Anthropic Claude</option>
+                <option value="openai">OpenAI GPT</option>
+                <option value="gemini">Google Gemini</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="ai-key" id="ai-key-label">מפתח API</label>
+              <div class="keyrow">
+                <input type="password" id="ai-key" placeholder="הדבק כאן את המפתח" autocomplete="off" spellcheck="false">
+                <button type="button" id="ai-key-show">הצג</button>
+              </div>
+            </div>
+            <button class="action" id="ai-diag">בדוק חיבור</button>
+            <div class="field">
+              <label for="ai-model">מודל</label>
+              <select id="ai-model"></select>
+              <input type="text" id="ai-model-custom" placeholder="שם מודל מלא" spellcheck="false" style="display:none; margin-top:8px;">
+              <button class="action" id="ai-refresh" style="display:none;">רענן רשימת מודלים חינמיים</button>
+              <p class="small-note" id="free-note" style="display:none; margin-top:10px;">
+                הרשימה נטענת חיה מ-OpenRouter, כי המודלים החינמיים מתחלפים כל הזמן.
+                "ניתוב אוטומטי" בוחר עבורך מודל חינמי זמין, ולכן ימשיך לעבוד גם כשמודל מסוים ייעלם.
+                המכסה החינמית מוגבלת בקצב — אם תקבל 429, חכה דקה.
+              </p>
+            </div>
+            <div class="field">
+              <label for="ai-autofix">ניסיונות תיקון אוטומטי אחרי שגיאת קימפול</label>
+              <select id="ai-autofix">
+                <option value="0">ללא</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+              </select>
+            </div>
+            <p class="small-note">
+              המפתח נשמר רק בדפדפן הזה ונשלח ישירות מהמכשיר לספק שבחרת, בלי שרת ביניים.
+              לכל ספק נשמר מפתח נפרד.
+              כל מי שיש לו גישה למכשיר או לעותק של האפליקציה יכול לקרוא אותו, אז אל תפרסם את התיקייה הזו באינטרנט עם מפתח בתוכה.
+            </p>
+          </details>
+        </div>
+      </section>
+
+      <!-- ============ אוסף ============ -->
+      <section class="panel-section" id="sec-lib">
+        <div class="group">
+          <h2>האוסף שלי</h2>
+          <div class="field">
+            <div class="keyrow">
+              <input type="text" id="lib-name" placeholder="שם לשיידר הנוכחי" spellcheck="false">
+              <button type="button" id="lib-save">שמור</button>
+            </div>
+          </div>
+          <div class="lib-grid" id="lib-grid"></div>
+          <p class="empty-note" id="lib-empty">
+            עוד לא שמרת כלום. כשרץ שיידר שאהבת, לחץ על הכוכב למעלה או תן לו שם ושמור כאן.
+            כל פריט נשמר עם תמונה ממוזערת של איך שהוא נראה באותו רגע.
+          </p>
+          <div class="btn-row">
+            <button class="action" id="lib-export">ייצא לקובץ</button>
+            <button class="action" id="lib-import-btn">ייבא מקובץ</button>
+          </div>
+          <input type="file" id="lib-import" accept=".json,application/json">
+        </div>
+
+        <div class="group">
+          <h2>נוצרו לאחרונה</h2>
+          <div class="field" id="hist-wrap" style="display:none;">
+            <div class="keyrow">
+              <select id="ai-hist"></select>
+              <button type="button" id="ai-hist-clear">נקה</button>
+            </div>
+          </div>
+          <p class="small-note">12 השיידרים האחרונים שנוצרו ב-AI נשמרים כאן אוטומטית ונדרסים עם הזמן. מה שאתה רוצה לשמור לתמיד — שמור לאוסף.</p>
+        </div>
+      </section>
+
+      <!-- ============ קוד ============ -->
+      <section class="panel-section" id="sec-code">
+        <div class="group">
+          <h2>קובץ Fragment Shader (sky.fsh)</h2>
+          <div class="tabbtns">
+            <button class="tabbtn active" id="tab-upload-fsh">קובץ</button>
+            <button class="tabbtn" id="tab-paste-fsh">הדבקה</button>
+          </div>
+          <div id="upload-view-fsh">
+            <div class="dropzone" id="dropzone-fsh">
+              <div>📄 גרור sky.fsh לכאן</div>
+              <div>או לחץ לבחירה</div>
+              <div class="fname" id="fname-fsh"></div>
+            </div>
+            <input type="file" id="file-fsh" accept=".fsh,.glsl,.txt">
+          </div>
+          <div id="paste-view-fsh" style="display:none;">
+            <textarea id="paste-fsh" placeholder="הדבק כאן את תוכן sky.fsh..."></textarea>
+          </div>
+          <button class="action primary" id="apply-fsh">טען שיידר</button>
+          <button class="action" id="dl-fsh">הורד sky.fsh</button>
+          <div id="err-box"></div>
+        </div>
+      </section>
+
+      <!-- ============ תצוגה ============ -->
+      <section class="panel-section" id="sec-view">
+        <div class="group">
+          <h2>מהירות ותנועה</h2>
+          <div class="row">
+            <label>מהירות זמן (GameTime → שניות) <span class="val" id="v-speed">1200</span></label>
+            <input type="range" id="speed" min="0" max="4000" step="10" value="1200">
+          </div>
+          <div class="checkrow"><span>השהה אנימציה</span><input type="checkbox" id="pause"></div>
+        </div>
+
+        <div class="group">
+          <h2>מצלמה</h2>
+          <div class="row">
+            <label>זום <span class="val" id="v-zoom">×1.0 · 70°</span></label>
+            <input type="range" id="zoom" min="-100" max="150" step="2" value="0">
+          </div>
+          <div class="row">
+            <label>סיבוב אופקי (יאו) <span class="val" id="v-yaw">20°</span></label>
+            <input type="range" id="yaw" min="-180" max="180" step="1" value="20">
+          </div>
+          <div class="row">
+            <label>סיבוב אנכי (פיץ') <span class="val" id="v-pitch">8°</span></label>
+            <input type="range" id="pitch" min="-89" max="89" step="1" value="8">
+          </div>
+          <button class="action" id="reset-cam">אפס מבט</button>
+        </div>
+
+        <div class="group">
+          <button class="action" id="dl-frame">שמור פריים כ-PNG</button>
+          <p class="small-note" style="margin-top:14px;">
+            ה-uniforms המוזרקים תואמים לצנרת ה-sky core shader הוונילית של Minecraft:
+            GameTime, ModelViewMat (סיבוב מצלמה בלבד, ללא הזזה), ScreenSize, ColorModulator, ו-Sampler0
+            (מוזן כלבן 1×1 — שיידרי שמיים בד"כ לא תלויים בתוכן הטקסטורה מעבר לערוץ האלפא).
+            שורת #version 150 מומרת אוטומטית ל-300 es כדי לרוץ ב-WebGL2.
+            הזום פועל דרך ModelViewMat, כך שהוא עובד על כל שיידר שבונה את קרן המבט בצורה הרגילה — בלי לשנות את הקוד.
+            שיידרים שנוצרו ב-AI כוללים שורות #moj_import אמיתיות, כך שאפשר להעתיק אותם ישירות ל-resource pack.
+          </p>
+        </div>
+      </section>
+
+    </div>
+  </aside>
+
+  <button id="show-chrome" aria-label="הצג תפריט">⌃ תפריט</button>
+</div>
+
+<script>
+
+/* =====================================================================
+   Sky core-shader scaffolding
+   Vanilla Minecraft's sky.fsh (core shader, via moj_import globals /
+   dynamictransforms) receives roughly:
+
+     uniform sampler2D Sampler0;
+     uniform mat4 ModelViewMat;   // camera ROTATION only, no translation
+     uniform vec2 ScreenSize;
+     uniform vec4 ColorModulator;
+     uniform float GameTime;      // 0..1 repeating, real seconds = GameTime * (a shader-defined speed constant)
+     in vec4 vertexColor;
+     in vec2 texCoord0;
+     in float sphericalVertexDistance;
+     in float cylindricalVertexDistance;
+     (+ optional fog uniforms if apply_fog() is used)
+
+   There's no block geometry, no Position/Normal/UV0 attributes — sky
+   shaders draw across a full-screen quad and reconstruct a view ray from
+   gl_FragCoord + ScreenSize + ModelViewMat, exactly like the DBZ shader
+   in this conversation does.
+   ===================================================================== */
+
+const canvas = document.getElementById('glcanvas');
+const gl = canvas.getContext('webgl2', { antialias:true, preserveDrawingBuffer:true });
+const statusDot = document.getElementById('status-dot');
+const statusText = document.getElementById('status-text');
+const errBox = document.getElementById('err-box');
+const emptyState = document.getElementById('empty-state');
+
+if(!gl){
+  statusDot.classList.add('err');
+  statusText.textContent = 'WebGL2 לא נתמך';
+  errBox.style.display = 'block';
+  errBox.textContent = 'הדפדפן הזה לא תומך ב-WebGL2. נסה גרסה עדכנית של Chrome / Firefox / Edge.';
+}
+
+// Base vertex shader for the full-screen quad. Any `in` varyings the loaded
+// fragment shader declares (vertexColor, texCoord0, sphericalVertexDistance,
+// etc.) must have a matching `out` of the same name and type in the vertex
+// shader, or WebGL2's linker rejects the program — GLSL ES 300 is stricter
+// about this than desktop GLSL 150, which some drivers tolerate mismatches
+// on. Rather than hardcode one fixed set of varyings (which would only fix
+// this for shaders using those exact names), scan the fragment source for
+// its `in` declarations and synthesize matching outputs dynamically.
+function buildVertexSrc(fragSrc){
+  const varyingRe = /^\s*in\s+(float|vec2|vec3|vec4|int|mat3|mat4)\s+(\w+)\s*;/gm;
+  const seen = new Map();
+  let m;
+  while((m = varyingRe.exec(fragSrc))){
+    seen.set(m[2], m[1]);
+  }
+  // Sampler0/gl_FragCoord-derived built-ins are never varyings; also skip
+  // fragment-only reserved names just in case a shader declares something
+  // unexpected with one of these identifiers.
+  seen.delete('fragColor');
+
+  let outDecls = '';
+  let assigns = '';
+  for(const [name, type] of seen.entries()){
+    outDecls += `out ${type} ${name};\n`;
+    if(type === 'vec4' && /color/i.test(name)){
+      assigns += `  ${name} = vec4(1.0);\n`;
+    }else if(type === 'vec2'){
+      assigns += `  ${name} = aPos * 0.5 + 0.5;\n`;
+    }else{
+      assigns += `  ${name} = ${type}(0.0);\n`;
+    }
+  }
+
+  return `#version 300 es
+in vec2 aPos;
+${outDecls}
+void main(){
+  gl_Position = vec4(aPos, 0.0, 1.0);
+${assigns}}`;
+}
+
+let program = null;
+let hasLoadedShader = false;
+let currentShaderSrc = '';
+let lastCompileError = null;
+let camYaw = 20 * Math.PI/180, camPitch = 8 * Math.PI/180;
+let startTime = performance.now();
+let pausedAt = 0, timePaused = false;
+let U = {};
+
+/* ---------------- shader compile helpers ---------------- */
+function compileShader(type, src){
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)){
+    const log = gl.getShaderInfoLog(sh);
+    gl.deleteShader(sh);
+    throw new Error((type === gl.VERTEX_SHADER ? '[VERTEX]\n' : '[FRAGMENT]\n') + log);
+  }
+  return sh;
+}
+
+// Minecraft resolves #moj_import <minecraft:globals.glsl>,
+// <minecraft:dynamictransforms.glsl>, and <minecraft:fog.glsl> by pulling in
+// the engine's own declarations for GameTime, ModelViewMat, ScreenSize,
+// ColorModulator, the Fog* uniforms, and the apply_fog() function. The
+// browser has no access to those files, so simply deleting the #moj_import
+// lines (as before) leaves every one of those names undeclared — which is
+// exactly the "undeclared identifier" error being hit. This function deletes
+// the import lines AND inserts real declarations, but only for identifiers
+// the shader source actually references, so shaders that don't use e.g.
+// apply_fog don't pick up unused uniforms.
+function resolveMojImports(src){
+  let out = src.replace(/^\s*#moj_import\s*<[^>]*>\s*$/gm, '');
+  const uses = (name) => new RegExp('\\b' + name + '\\b').test(out);
+
+  let decls = '';
+  if(uses('GameTime') && !/\buniform\s+float\s+GameTime\b/.test(out)) decls += 'uniform float GameTime;\n';
+  if(uses('ModelViewMat') && !/\buniform\s+mat4\s+ModelViewMat\b/.test(out)) decls += 'uniform mat4 ModelViewMat;\n';
+  if(uses('ScreenSize') && !/\buniform\s+vec2\s+ScreenSize\b/.test(out)) decls += 'uniform vec2 ScreenSize;\n';
+  if(uses('ColorModulator') && !/\buniform\s+vec4\s+ColorModulator\b/.test(out)) decls += 'uniform vec4 ColorModulator;\n';
+
+  // fog.glsl: uniforms + the apply_fog() helper, only pulled in if the
+  // shader calls apply_fog or references its uniforms directly.
+  const usesFog = uses('apply_fog') || uses('FogEnvironmentalStart') || uses('FogRenderDistanceStart') || uses('FogColor');
+  if(usesFog){
+    if(!/\buniform\s+float\s+FogEnvironmentalStart\b/.test(out)) decls += 'uniform float FogEnvironmentalStart;\n';
+    if(!/\buniform\s+float\s+FogEnvironmentalEnd\b/.test(out)) decls += 'uniform float FogEnvironmentalEnd;\n';
+    if(!/\buniform\s+float\s+FogRenderDistanceStart\b/.test(out)) decls += 'uniform float FogRenderDistanceStart;\n';
+    if(!/\buniform\s+float\s+FogRenderDistanceEnd\b/.test(out)) decls += 'uniform float FogRenderDistanceEnd;\n';
+    if(!/\buniform\s+vec4\s+FogColor\b/.test(out)) decls += 'uniform vec4 FogColor;\n';
+    if(uses('apply_fog') && !/vec4\s+apply_fog\s*\(/.test(out)){
+      decls += `vec4 apply_fog(vec4 inColor, float sphericalDist, float cylindricalDist, float envStart, float envEnd, float distStart, float distEnd, vec4 fogColor){
+    float d = max(sphericalDist, cylindricalDist);
+    float f = clamp((d - distStart) / max(distEnd - distStart, 1e-4), 0.0, 1.0);
+    return vec4(mix(inColor.rgb, fogColor.rgb, f * fogColor.a), inColor.a);
+}
+`;
+    }
+  }
+
+  // #version must remain the first token in the file. If a version line is
+  // present, splice the declarations in immediately after it rather than
+  // prepending to the whole source (which would push decls ahead of
+  // #version and trade one compile error for another).
+  const versionMatch = out.match(/^\s*#version[^\n]*\n/m);
+  if(versionMatch){
+    const idx = out.indexOf(versionMatch[0]) + versionMatch[0].length;
+    out = out.slice(0, idx) + decls + out.slice(idx);
+  }else{
+    out = decls + out;
+  }
+  return out;
+}
+
+// Minecraft core shaders are always written as desktop GLSL "#version 150".
+// WebGL2 only runs GLSL ES, which requires "#version 300 es" and, for
+// fragment shaders, an explicit precision qualifier. Convert unconditionally
+// — every sky.fsh dropped in will hit this, not just a hardcoded default.
+function toGLSLES300(src, isFragment){
+  let out = src.replace(/^\s*#version\s+150\s*$/m, '#version 300 es');
+  if(!/^\s*#version\s+300\s+es/m.test(out)){
+    out = '#version 300 es\n' + out;
+  }
+  if(isFragment && !/precision\s+(highp|mediump|lowp)\s+float\s*;/.test(out)){
+    out = out.replace(/(#version 300 es\s*\n)/, '$1precision highp float;\n');
+  }
+  return out;
+}
+
+function buildProgram(fshRaw){
+  const fsh = toGLSLES300(resolveMojImports(fshRaw), true);
+  const vsh = buildVertexSrc(fsh);
+  const vs = compileShader(gl.VERTEX_SHADER, vsh);
+  const fs = compileShader(gl.FRAGMENT_SHADER, fsh);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+    throw new Error('[LINK]\n' + gl.getProgramInfoLog(prog));
+  }
+  return prog;
+}
+
+// Compile a candidate without touching the live program. The AI repair loop
+// needs to test a generated shader and, if it fails, leave whatever is already
+// on screen running while it asks for a correction.
+function tryBuild(fshRaw){
+  try{ return { prog: buildProgram(fshRaw), err: null }; }
+  catch(e){ return { prog: null, err: e.message }; }
+}
+
+function installProgram(prog, src){
+  if(program) gl.deleteProgram(program);
+  program = prog;
+  hasLoadedShader = true;
+  currentShaderSrc = src;
+  lastCompileError = null;
+  emptyState.style.display = 'none';
+  statusDot.classList.remove('err'); statusDot.classList.add('ok');
+  statusText.textContent = 'רץ';
+  errBox.style.display = 'none';
+  document.getElementById('ai-fix').style.display = 'none';
+  cacheUniformLocations();
+}
+
+function showCompileError(msg){
+  lastCompileError = msg;
+  statusDot.classList.remove('ok'); statusDot.classList.add('err');
+  statusText.textContent = 'שגיאת קימפול';
+  errBox.style.display = 'block';
+  errBox.textContent = msg;
+  document.getElementById('ai-fix').style.display = 'block';
+  console.error(msg);
+}
+
+function tryLoad(fshRaw){
+  const built = tryBuild(fshRaw);
+  if(built.prog) installProgram(built.prog, fshRaw);
+  else showCompileError(built.err);
+  return !built.err;
+}
+
+function safeLoc(name){ return program ? gl.getUniformLocation(program, name) : null; }
+function cacheUniformLocations(){
+  U = {
+    GameTime: safeLoc('GameTime'),
+    ModelViewMat: safeLoc('ModelViewMat'),
+    ScreenSize: safeLoc('ScreenSize'),
+    ColorModulator: safeLoc('ColorModulator'),
+    Sampler0: safeLoc('Sampler0'),
+    // Preview-only extra: vanilla Minecraft has no FOV uniform, so this stays
+    // null for game-accurate shaders and the FOV slider simply does nothing.
+    // A shader that opts in with `uniform float FOV;` gets it driven live.
+    FOV: safeLoc('FOV'),
+    // optional fog uniforms some sky shaders reference via apply_fog()
+    FogEnvironmentalStart: safeLoc('FogEnvironmentalStart'),
+    FogEnvironmentalEnd: safeLoc('FogEnvironmentalEnd'),
+    FogRenderDistanceStart: safeLoc('FogRenderDistanceStart'),
+    FogRenderDistanceEnd: safeLoc('FogRenderDistanceEnd'),
+    FogColor: safeLoc('FogColor'),
+  };
+}
+
+/* ---------------- full-screen quad ---------------- */
+const quadBuf = gl ? gl.createBuffer() : null;
+if(gl){
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+}
+
+/* ---------------- fallback 1x1 white texture for Sampler0 ---------------- */
+let whiteTex = null;
+function makeWhiteTexture(){
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([255,255,255,255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return tex;
+}
+
+/* ---------------- camera rotation matrix ---------------- */
+// A sky shader has no geometry, so there is nothing to move closer. What it
+// does have is a ray reconstructed from gl_FragCoord and then rotated by
+// inverse(ModelViewMat). Scaling the x/y columns of that matrix by z leaves the
+// shader with inverse() giving it (u/z, v/z, -f): the same screen pixel now
+// maps to a narrower angle, which is exactly a zoom. It costs nothing and works
+// on any shader that builds its ray the standard way — including every one the
+// AI writes, because the system prompt specifies that form.
+function yawPitchToMat4(yaw, pitch, z){
+  const cy=Math.cos(yaw), sy=Math.sin(yaw), cp=Math.cos(pitch), sp=Math.sin(pitch);
+  return new Float32Array([
+    cy*z,    sy*sp*z, sy*cp,   0,
+    0,       cp*z,    -sp,     0,
+    -sy*z,   cy*sp*z, cy*cp,   0,
+    0,       0,       0,       1
+  ]);
+}
+
+// Shaders are told to assume a 70° field, so express the zoom back in degrees
+// for the readout and for shaders that opt into a FOV uniform.
+const BASE_TAN_HALF = Math.tan(35 * Math.PI / 180);
+function zoomToFov(z){ return 2 * Math.atan(BASE_TAN_HALF / z) * 180 / Math.PI; }
+
+let camZoom = 1;
+function setZoom(z, fromSlider){
+  camZoom = Math.max(0.25, Math.min(8, z));
+  const out = document.getElementById('v-zoom');
+  // One decimal loses the difference between 0.25x and 0.3x, so widen below 1.
+  const mult = camZoom < 1 ? camZoom.toFixed(2).replace(/0$/, '') : camZoom.toFixed(1);
+  if(out) out.textContent = '×' + mult + ' · ' + zoomToFov(camZoom).toFixed(0) + '°';
+  if(!fromSlider){
+    const sl = document.getElementById('zoom');
+    if(sl) sl.value = String(Math.round(Math.log2(camZoom) * 50));
+  }
+}
+
+/* ---------------- render loop ---------------- */
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const nw = Math.round(w*dpr), nh = Math.round(h*dpr);
+  if(canvas.width!==nw || canvas.height!==nh){ canvas.width=nw; canvas.height=nh; }
+}
+
+function render(now){
+  requestAnimationFrame(render);
+  if(!gl) return;
+  resize();
+  gl.viewport(0,0,canvas.width,canvas.height);
+
+  if(!program || !hasLoadedShader) return;
+  gl.useProgram(program);
+
+  const elapsed = timePaused ? pausedAt : (now-startTime)/1000;
+  const speed = parseFloat(document.getElementById('speed').value);
+
+  if(U.GameTime) gl.uniform1f(U.GameTime, elapsed / Math.max(speed, 0.0001));
+  if(U.ModelViewMat) gl.uniformMatrix4fv(U.ModelViewMat, false, yawPitchToMat4(camYaw, camPitch, camZoom));
+  if(U.ScreenSize) gl.uniform2f(U.ScreenSize, canvas.width, canvas.height);
+  if(U.FOV) gl.uniform1f(U.FOV, zoomToFov(camZoom));
+  if(U.ColorModulator) gl.uniform4f(U.ColorModulator, 1,1,1,1);
+  if(U.FogEnvironmentalStart) gl.uniform1f(U.FogEnvironmentalStart, 0);
+  if(U.FogEnvironmentalEnd) gl.uniform1f(U.FogEnvironmentalEnd, 100);
+  if(U.FogRenderDistanceStart) gl.uniform1f(U.FogRenderDistanceStart, 0);
+  if(U.FogRenderDistanceEnd) gl.uniform1f(U.FogRenderDistanceEnd, 200);
+  if(U.FogColor) gl.uniform4f(U.FogColor, 0.6,0.7,0.9,1.0);
+
+  if(!whiteTex) whiteTex = makeWhiteTexture();
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, whiteTex);
+  if(U.Sampler0) gl.uniform1i(U.Sampler0, 0);
+
+  const loc = gl.getAttribLocation(program, 'aPos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+
+/* ---------------- UI wiring ---------------- */
+function bindSlider(id, valId, fmt){
+  const el = document.getElementById(id), out = document.getElementById(valId);
+  const upd = ()=> out.textContent = fmt?fmt(el.value):el.value;
+  el.addEventListener('input', upd); upd();
+}
+bindSlider('speed','v-speed');
+document.getElementById('zoom').addEventListener('input', e=>{
+  setZoom(Math.pow(2, parseFloat(e.target.value) / 50), true);
+});
+setZoom(1);
+bindSlider('yaw','v-yaw', v=>v+'°');
+bindSlider('pitch','v-pitch', v=>v+'°');
+
+document.getElementById('yaw').addEventListener('input', e=>{ camYaw = parseFloat(e.target.value)*Math.PI/180; });
+document.getElementById('pitch').addEventListener('input', e=>{ camPitch = parseFloat(e.target.value)*Math.PI/180; });
+document.getElementById('reset-cam').addEventListener('click', ()=>{
+  document.getElementById('yaw').value = 20;
+  document.getElementById('pitch').value = 8;
+  document.getElementById('yaw').dispatchEvent(new Event('input'));
+  document.getElementById('pitch').dispatchEvent(new Event('input'));
+  setZoom(1);
+});
+document.getElementById('pause').addEventListener('change', e=>{
+  timePaused = e.target.checked;
+  if(timePaused) pausedAt = (performance.now()-startTime)/1000;
+  else startTime = performance.now() - pausedAt*1000;
+});
+
+// drag / touch to orbit
+let dragging=false, lastX=0, lastY=0;
+canvas.addEventListener('mousedown', e=>{dragging=true; lastX=e.clientX; lastY=e.clientY;});
+window.addEventListener('mouseup', ()=>dragging=false);
+window.addEventListener('mousemove', e=>{
+  if(!dragging) return;
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  lastX=e.clientX; lastY=e.clientY;
+  const k = 0.005 / camZoom;
+  camYaw -= dx*k;
+  camPitch = Math.max(-1.4, Math.min(1.4, camPitch - dy*k));
+  document.getElementById('yaw').value = (camYaw*180/Math.PI).toFixed(0);
+  document.getElementById('pitch').value = (camPitch*180/Math.PI).toFixed(0);
+  document.getElementById('v-yaw').textContent = document.getElementById('yaw').value+'°';
+  document.getElementById('v-pitch').textContent = document.getElementById('pitch').value+'°';
+});
+function touchSpread(t){
+  const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+  return Math.hypot(dx, dy);
+}
+let pinchFrom = 0, pinchZoomFrom = 1, lastTap = 0;
+
+canvas.addEventListener('touchstart', e=>{
+  if(e.touches.length === 2){
+    dragging = false;                    // two fingers means zoom, not orbit
+    pinchFrom = touchSpread(e.touches);
+    pinchZoomFrom = camZoom;
+    return;
+  }
+  // double tap anywhere on the sky returns to 1×
+  const now = Date.now();
+  if(now - lastTap < 300){ setZoom(1); lastTap = 0; }
+  else lastTap = now;
+
+  dragging = true; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+}, {passive:true});
+
+window.addEventListener('touchend', e=>{
+  if(e.touches.length < 2) pinchFrom = 0;
+  if(e.touches.length === 1){
+    // lifting one finger after a pinch: re-seed so the view doesn't jump
+    lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+    dragging = true;
+  }else{
+    dragging = false;
+  }
+});
+
+window.addEventListener('touchmove', e=>{
+  if(e.touches.length === 2 && pinchFrom > 0){
+    setZoom(pinchZoomFrom * (touchSpread(e.touches) / Math.max(pinchFrom, 1)));
+    return;
+  }
+  if(!dragging) return;
+  const dx=e.touches[0].clientX-lastX, dy=e.touches[0].clientY-lastY;
+  lastX=e.touches[0].clientX; lastY=e.touches[0].clientY;
+  // Rotating slower when zoomed in keeps the pointer speed feeling constant.
+  const k = 0.005 / camZoom;
+  camYaw -= dx*k;
+  camPitch = Math.max(-1.4, Math.min(1.4, camPitch - dy*k));
+}, {passive:true});
+
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  setZoom(camZoom * Math.pow(2, -e.deltaY * 0.0016));
+}, {passive:false});
+canvas.addEventListener('dblclick', ()=> setZoom(1));
+
+// upload/paste tabs
+const tU = document.getElementById('tab-upload-fsh');
+const tP = document.getElementById('tab-paste-fsh');
+const vU = document.getElementById('upload-view-fsh');
+const vP = document.getElementById('paste-view-fsh');
+tU.addEventListener('click', ()=>{ tU.classList.add('active'); tP.classList.remove('active'); vU.style.display='block'; vP.style.display='none'; });
+tP.addEventListener('click', ()=>{ tP.classList.add('active'); tU.classList.remove('active'); vP.style.display='block'; vU.style.display='none'; });
+
+// dropzone wiring
+function wireDropzone(zoneId, inputId, onFile, fnameId){
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  zone.addEventListener('click', ()=> input.click());
+  zone.addEventListener('dragover', e=>{ e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', ()=> zone.classList.remove('drag'));
+  zone.addEventListener('drop', e=>{
+    e.preventDefault(); zone.classList.remove('drag');
+    if(e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener('change', ()=>{ if(input.files.length) onFile(input.files[0]); });
+  return { setName:(n)=>{ if(fnameId) document.getElementById(fnameId).textContent = n; } };
+}
+
+let pendingFshText = null;
+// The collection panel lives in its own closure but still has to keep the
+// "load shader" button in sync with what it just restored.
+window.setPendingShader = function(src){ pendingFshText = src; };
+const dzFsh = wireDropzone('dropzone-fsh','file-fsh', file=>{
+  const reader = new FileReader();
+  reader.onload = ()=>{ pendingFshText = reader.result; dzFsh.setName(file.name); document.getElementById('paste-fsh').value = reader.result; };
+  reader.readAsText(file);
+}, 'fname-fsh');
+
+document.getElementById('apply-fsh').addEventListener('click', ()=>{
+  const fshText = (vP.style.display !== 'none')
+    ? document.getElementById('paste-fsh').value
+    : (pendingFshText || document.getElementById('paste-fsh').value);
+
+  if(!fshText || !fshText.trim()){
+    statusDot.classList.remove('ok'); statusDot.classList.add('err');
+    statusText.textContent = 'לא נטען שיידר';
+    errBox.style.display = 'block';
+    errBox.textContent = 'לא סופק תוכן ל-sky.fsh. גרור קובץ, בחר קובץ, או הדבק את הקוד בתיבה.';
+    return;
+  }
+  tryLoad(fshText);
+});
+
+document.getElementById('dl-frame').addEventListener('click', ()=>{
+  canvas.toBlob(blob=>{
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'sky-shader-frame.png';
+    a.click();
+  });
+});
+
+/* =====================================================================
+   AI shader generation — Google Gemini
+   Calls the Generative Language REST API straight from the page. There is
+   no backend to proxy through, so the key lives in this browser only and
+   travels device -> Google.
+   ===================================================================== */
+(function(){
+
+// The contract below is what makes generated shaders work in BOTH places:
+// #moj_import lines keep them valid Minecraft core shaders, and this viewer
+// strips those imports and injects the equivalent declarations itself.
+const SYSTEM_PROMPT = `You are a graphics programmer who writes Minecraft core-shader sky fragment shaders (sky.fsh) that must also compile and run unmodified inside a WebGL2 preview.
+
+CRITICAL: Your entire reply must be GLSL source code. Not one word before it, not one word after it. No "Here is", no "Sure", no explanation, no markdown fences, no closing remarks. The first character you output is "#" (from #version) and the last character is "}". If you add anything else, the shader fails to compile. This overrides any instinct to be helpful or conversational.
+
+OUTPUT CONTRACT — follow exactly:
+- Reply with GLSL source code and nothing else. No markdown fences, no prose, no explanation, before or after.
+- Start the file with these three lines:
+    #version 150
+    #moj_import <minecraft:globals.glsl>
+    #moj_import <minecraft:dynamictransforms.glsl>
+- Declare exactly one output: out vec4 fragColor;
+- Keep the whole file under 200 lines.
+
+INPUTS. The two imports above already provide these, so never redeclare them:
+    float GameTime      // wraps 0.0 -> 1.0. Multiply up for visible motion: float t = GameTime * 1200.0;
+    mat4  ModelViewMat  // camera rotation only, no translation
+    vec2  ScreenSize    // framebuffer size in pixels
+    vec4  ColorModulator
+Sampler0 is NOT provided by the imports. Declare it yourself only if you use it — and note the preview binds a 1x1 white pixel to it, so never depend on its contents.
+
+VIEW RAY. There is no geometry and no vertex attributes, so build the ray yourself:
+    const float FOV_DEG = 70.0;
+    vec2 uv  = (gl_FragCoord.xy - 0.5 * ScreenSize) / max(ScreenSize.y, 1.0);
+    vec3 cam = normalize(vec3(uv, -0.5 / tan(radians(FOV_DEG) * 0.5)));
+    vec3 dir = normalize((inverse(ModelViewMat) * vec4(cam, 0.0)).xyz);
+dir.y is the up axis: +1 is the zenith, 0 is the horizon, negative is below it.
+
+HARD RULES. The preview rejects shaders that break these:
+- Never read vertexColor, texCoord0, sphericalVertexDistance or cylindricalVertexDistance. The preview feeds them dummy values.
+- No #extension, no #include, no uniforms beyond the ones listed above.
+- Every loop needs a compile-time constant bound and no loop may exceed 64 iterations. This has to hold 60fps on a phone.
+- Write your own hash / noise / fbm helpers inline. Nothing is included for you.
+- Never mix int and float implicitly: write 1.0 not 1, and float(i) for loop counters.
+- Guard every division with max(x, 1e-4). Clamp the final colour to [0,1] and set fragColor.a to 1.0.
+
+REFERENCE IMAGES:
+If images are attached, treat them as art direction, not as data to sample. Read the palette, the light direction, the time of day, the cloud shapes and the overall mood out of them, and reproduce that procedurally in code. Never try to reproduce the image pixel for pixel — the shader has no access to it at runtime.
+
+WHAT SEPARATES A GOOD SKY FROM A FLAT ONE. Most of these are cheap; include the ones that fit the request:
+- A gradient that is biased, not linear. pow(h, 0.4) keeps the warm band tight near the horizon instead of smearing it over the whole dome.
+- A sun or moon built from three stacked terms: a hard disc (pow(sd, ~900) * 12), a tight bloom (pow(sd, ~25) * 0.5), and a wide haze (pow(sd, ~3) * 0.15) that tints the surrounding sky.
+- Clouds on a projected plane — dir.xz * (height / max(dir.y, 0.06)) — never on raw dir.xz. The division is what makes them stretch toward the horizon like real clouds.
+- Two cloud layers at different heights drifting at different speeds. The parallax between them is most of what sells depth.
+- Directional shading on the clouds, so the side facing the sun is bright and the other side is not.
+- Anything at the horizon fading out with smoothstep, so layers do not end in a hard line.
+- A tiny ordered dither added at the very end. An 8-bit framebuffer shows visible banding across a smooth gradient without it.
+- Motion slow enough to read as weather rather than static: cloud drift around t * 0.01.
+
+STYLE:
+- Fully procedural and deterministic. No texture lookups for content.
+- Put the tunable constants near the top of the file with a one-line comment each, so a human can dial the look in by hand afterwards.
+- Always give the sky real depth: a horizon-to-zenith gradient underneath whatever the request asks for on top.
+
+REFERENCE. This is the structure and quality bar to work at — not a template to copy. Match its rigour, then write whatever the request actually asks for:
+
+#version 150
+#moj_import <minecraft:globals.glsl>
+#moj_import <minecraft:dynamictransforms.glsl>
+
+out vec4 fragColor;
+
+const float FOV_DEG    = 70.0;
+const float TIME_SCALE = 1200.0;
+const vec3  SUN_DIR    = normalize(vec3(0.36, 0.13, -0.92));
+const vec3  ZENITH_COL = vec3(0.07, 0.16, 0.42);
+const vec3  HORIZON_COL= vec3(0.88, 0.52, 0.33);
+const vec3  SUN_COL    = vec3(1.00, 0.86, 0.62);
+const float CLOUD_COVER= 0.52;
+
+float hash12(vec2 p){
+    vec3 q = fract(vec3(p.x, p.y, p.x) * 0.1031);
+    q += dot(q, vec3(q.y, q.z, q.x) + 33.33);
+    return fract((q.x + q.y) * q.z);
+}
+
+float vnoise(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i);
+    float b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0));
+    float d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p){
+    float v = 0.0, amp = 0.5;
+    for(int i = 0; i < 5; i++){
+        v += amp * vnoise(p);
+        p = p * 2.03 + vec2(11.7, 4.3);
+        amp *= 0.5;
+    }
+    return v;
+}
+
+// Project a direction onto a flat cloud plane above the viewer. Dividing by
+// dir.y is what makes the layer stretch and compress toward the horizon.
+vec2 cloudPlane(vec3 dir, float height){
+    return dir.xz * (height / max(dir.y, 0.06));
+}
+
+float starField(vec3 dir, float t){
+    vec2 g = dir.xz / max(abs(dir.y) + 0.35, 1e-4);
+    vec2 cell = floor(g * 60.0);
+    float r = hash12(cell);
+    if(r < 0.985) return 0.0;
+    vec2 sub = fract(g * 60.0) - 0.5;
+    float d = length(sub);
+    float twinkle = 0.55 + 0.45 * sin(t * 2.2 + r * 90.0);
+    return smoothstep(0.16, 0.0, d) * twinkle;
+}
+
+// An ordered dither, applied at the very end. An 8-bit framebuffer will show
+// visible rings across a smooth sky gradient without it.
+float dither(vec2 fragc){
+    return fract(sin(dot(floor(fragc), vec2(12.9898, 78.233))) * 43758.5453) / 255.0;
+}
+
+void main(){
+    float t = GameTime * TIME_SCALE;
+
+    vec2 uv  = (gl_FragCoord.xy - 0.5 * ScreenSize) / max(ScreenSize.y, 1.0);
+    vec3 cam = normalize(vec3(uv, -0.5 / tan(radians(FOV_DEG) * 0.5)));
+    vec3 dir = normalize((inverse(ModelViewMat) * vec4(cam, 0.0)).xyz);
+
+    // Base gradient. pow() biases the blend toward the horizon so the warm
+    // band stays tight instead of washing over the whole dome.
+    float h = clamp(dir.y, 0.0, 1.0);
+    vec3 col = mix(HORIZON_COL, ZENITH_COL, pow(h, 0.42));
+
+    // Sun: a hard disc, a tight bloom, and a wide haze that tints the sky.
+    float sd = max(dot(dir, SUN_DIR), 0.0);
+    col += SUN_COL * pow(sd, 900.0) * 12.0;
+    col += SUN_COL * pow(sd, 26.0) * 0.55;
+    col += SUN_COL * pow(sd, 3.5) * 0.14;
+
+    // Stars fade out as the sun climbs.
+    float night = smoothstep(0.25, -0.05, SUN_DIR.y);
+    col += vec3(0.85, 0.90, 1.00) * starField(dir, t) * night;
+
+    // Two cloud layers at different heights and speeds; the parallax between
+    // them is most of what sells the depth.
+    if(dir.y > 0.02){
+        vec2 p1 = cloudPlane(dir, 1.0) + vec2(t * 0.010, t * 0.004);
+        vec2 p2 = cloudPlane(dir, 1.9) + vec2(t * 0.020, -t * 0.006);
+
+        float lo = fbm(p1 * 1.7);
+        float hi = fbm(p2 * 2.9);
+
+        float mask = smoothstep(CLOUD_COVER, CLOUD_COVER + 0.30, lo * 0.72 + hi * 0.28);
+        mask *= smoothstep(0.02, 0.24, dir.y);          // thin out at the horizon
+
+        // Cheap lighting: brighten the side of the cloud facing the sun.
+        float lit = clamp(dot(normalize(vec3(p1.x, 1.4, p1.y)), SUN_DIR) * 0.5 + 0.5, 0.0, 1.0);
+        vec3 cloud = mix(vec3(0.34, 0.36, 0.46), vec3(1.02, 0.94, 0.86), lit);
+        cloud += SUN_COL * pow(sd, 8.0) * 0.30 * mask;   // rim glow near the sun
+
+        col = mix(col, cloud, mask * 0.92);
+    }
+
+    col *= ColorModulator.rgb;
+    col += dither(gl_FragCoord.xy);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+`;
+
+// Keys and model choices are stored per provider, so switching back and forth
+// doesn't make you re-paste anything.
+const LS = {
+  provider:'skyviewer.provider',
+  key:   id => 'skyviewer.' + id + '.key',
+  model: id => 'skyviewer.' + id + '.model',
+  fix:   'skyviewer.gemini.autofix',
+  hist:  'skyviewer.gemini.history'
+};
+
+// localStorage throws in private modes and on file:// in some browsers.
+// Degrade to "settings just don't persist" rather than breaking the panel.
+const store = {
+  get(k,d){ try{ const v = localStorage.getItem(k); return v===null ? d : v; }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+};
+
+const el = id => document.getElementById(id);
+const providerEl = el('ai-provider');
+const promptEl = el('ai-prompt'), keyEl = el('ai-key'), modelEl = el('ai-model'),
+      customEl = el('ai-model-custom'), fixEl = el('ai-autofix'), logEl = el('ai-log'),
+      histWrap = el('hist-wrap'), histEl = el('ai-hist'), pasteEl = el('paste-fsh'),
+      btnNew = el('ai-new'), btnEdit = el('ai-edit'), btnFix = el('ai-fix'), btnCancel = el('ai-cancel');
+
+let controller = null;
+
+/* ---------------- providers ---------------- */
+// Same job, three different request shapes. Each entry owns its endpoint,
+// auth, how an image is embedded, and where the text comes back — nothing
+// else in the module needs to know which one is selected.
+const PROVIDERS = {
+  openrouter: {
+    label: 'OpenRouter (חינם)',
+    keyLabel: 'מפתח OpenRouter (openrouter.ai/keys · ללא כרטיס אשראי)',
+    // The :free line-up rotates constantly, so this list is only a floor —
+    // fetchFreeModels() replaces it with whatever is actually free right now.
+    models: [
+      ['openrouter/free', 'ניתוב אוטומטי · בוחר מודל חינמי זמין'],
+      ['openai/gpt-oss-120b:free', 'GPT-OSS 120B · קוד'],
+      ['qwen/qwen3-coder:free',    'Qwen3 Coder · קוד']
+    ],
+    url: ()=> 'https://openrouter.ai/api/v1/chat/completions',
+    headers: key => ({
+      'Authorization': 'Bearer ' + key,
+      'X-OpenRouter-Title': 'Sky Shader Viewer'
+    }),
+    body: (model, system, text, images) => ({
+      model: model,
+      messages: [
+        { role:'system', content: system },
+        { role:'user', content: [{ type:'text', text: text }].concat(
+            images.map(im => ({ type:'image_url',
+              image_url:{ url:'data:' + im.mime + ';base64,' + im.b64 } }))) }
+      ]
+    }),
+    extract: d => (d && d.choices && d.choices[0] && d.choices[0].message
+      && d.choices[0].message.content) || '',
+    stop: d => d && d.choices && d.choices[0] && d.choices[0].finish_reason,
+    freeList: 'https://openrouter.ai/api/v1/models'
+  },
+
+  anthropic: {
+    label: 'Anthropic Claude',
+    keyLabel: 'מפתח Anthropic (console.anthropic.com)',
+    models: [
+      ['claude-opus-4-8',           'Opus 4.8 · הכי חזק בקוד'],
+      ['claude-sonnet-5',           'Sonnet 5 · מאוזן'],
+      ['claude-haiku-4-5-20251001', 'Haiku 4.5 · הכי מהיר']
+    ],
+    url: ()=> 'https://api.anthropic.com/v1/messages',
+    headers: key => ({
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      // Without this header the API refuses cross-origin browser calls.
+      'anthropic-dangerous-direct-browser-access': 'true'
+    }),
+    body: (model, system, text, images) => ({
+      model: model,
+      max_tokens: 8000,
+      system: system,
+      messages: [{ role:'user', content:
+        images.map(im => ({ type:'image',
+          source:{ type:'base64', media_type: im.mime, data: im.b64 } }))
+        .concat([{ type:'text', text: text }]) }]
+    }),
+    extract: d => ((d && d.content) || [])
+      .filter(b => b.type === 'text').map(b => b.text).join(''),
+    stop: d => d && d.stop_reason
+  },
+
+  openai: {
+    label: 'OpenAI GPT',
+    keyLabel: 'מפתח OpenAI (platform.openai.com)',
+    models: [
+      ['gpt-5.6-sol',   'GPT-5.6 Sol · הדגל'],
+      ['gpt-5.3-codex', 'GPT-5.3 Codex · מכוון קוד'],
+      ['gpt-5.5',       'GPT-5.5 · כללי'],
+      ['gpt-5.6-luna',  'GPT-5.6 Luna · מהיר וזול']
+    ],
+    url: ()=> 'https://api.openai.com/v1/chat/completions',
+    headers: key => ({ 'Authorization': 'Bearer ' + key }),
+    body: (model, system, text, images) => ({
+      model: model,
+      messages: [
+        { role:'system', content: system },
+        { role:'user', content: [{ type:'text', text: text }].concat(
+            images.map(im => ({ type:'image_url',
+              image_url:{ url:'data:' + im.mime + ';base64,' + im.b64 } }))) }
+      ]
+    }),
+    extract: d => (d && d.choices && d.choices[0] && d.choices[0].message
+      && d.choices[0].message.content) || '',
+    stop: d => d && d.choices && d.choices[0] && d.choices[0].finish_reason
+  },
+
+  gemini: {
+    label: 'Google Gemini',
+    keyLabel: 'מפתח Google AI Studio',
+    models: [
+      ['gemini-3.5-flash',      'Flash 3.5 · ברירת מחדל'],
+      ['gemini-3.1-pro-preview','Pro 3.1 · החזק ביותר'],
+      ['gemini-3.6-flash',      'Flash 3.6 · חדש וזול יותר'],
+      ['gemini-3.5-flash-lite', 'Flash Lite · הכי מהיר']
+    ],
+    url: model => 'https://generativelanguage.googleapis.com/v1beta/models/'
+                + encodeURIComponent(model) + ':generateContent',
+    headers: key => ({ 'x-goog-api-key': key }),
+    body: (model, system, text, images) => ({
+      systemInstruction: { parts: [{ text: system }] },
+      // Media before the instruction: the model follows a prompt better when
+      // what it refers to is already in context.
+      contents: [{ role:'user', parts:
+        images.map(im => ({ inlineData:{ mimeType: im.mime, data: im.b64 } }))
+        .concat([{ text: text }]) }],
+      generationConfig: { responseMimeType: 'text/plain' }
+    }),
+    extract: d => {
+      const c = d && d.candidates && d.candidates[0];
+      if(!c) return '';
+      // Thinking models return reasoning as parts flagged `thought`.
+      return ((c.content && c.content.parts) || [])
+        .filter(p => !p.thought && p.text).map(p => p.text).join('');
+    },
+    stop: d => {
+      const c = d && d.candidates && d.candidates[0];
+      return c ? c.finishReason : (d && d.promptFeedback && d.promptFeedback.blockReason);
+    },
+    listUrl: 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',
+    // Google's newer "AQ."-format credentials are refused as API keys on some
+    // accounts but accepted as bearer tokens.
+    authFallback: key => ({ 'Authorization': 'Bearer ' + key })
+  }
+};
+
+function provider(){ return PROVIDERS[providerEl.value] || PROVIDERS.anthropic; }
+
+// The free line-up on OpenRouter rotates week to week, so ask for the current
+// one instead of shipping a list that goes stale. Cached for a day; any failure
+// just leaves the built-in fallback in place.
+async function fetchFreeModels(force){
+  const P = provider();
+  if(!P.freeList) return null;
+
+  const CACHE = 'skyviewer.openrouter.free';
+  if(!force){
+    try{
+      const hit = JSON.parse(store.get(CACHE, 'null'));
+      if(hit && Date.now() - hit.t < 864e5 && hit.models && hit.models.length) return hit.models;
+    }catch(e){}
+  }
+
+  const res = await fetchWithTimeout(P.freeList, { method:'GET' }, null);
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+
+  const free = ((data && data.data) || [])
+    .filter(m => m.pricing
+      && parseFloat(m.pricing.prompt) === 0
+      && parseFloat(m.pricing.completion) === 0)
+    .map(m => [m.id, (m.name || m.id).replace(/\s*\(free\)\s*$/i, '')])
+    .sort((a, b) => a[1].localeCompare(b[1]));
+
+  // The auto-router belongs at the top: it is the one slug that keeps working
+  // after any individual free model disappears.
+  const list = [['openrouter/free', 'ניתוב אוטומטי · בוחר מודל חינמי זמין']]
+    .concat(free.filter(m => m[0] !== 'openrouter/free'));
+
+  store.set(CACHE, JSON.stringify({ t: Date.now(), models: list }));
+  return list;
+}
+
+async function refreshModels(force){
+  if(!provider().freeList) return;
+  const btn = el('ai-refresh');
+  btn.disabled = true;
+  const previous = modelEl.value;
+  try{
+    const list = await fetchFreeModels(force);
+    if(list && list.length){
+      PROVIDERS.openrouter.models = list;
+      loadProvider('openrouter', false);
+      if(Array.prototype.some.call(modelEl.options, o => o.value === previous)) modelEl.value = previous;
+      log(list.length + ' מודלים חינמיים זמינים כרגע.');
+    }
+  }catch(e){
+    log('לא הצלחתי לרענן את רשימת המודלים. הרשימה המובנית עדיין עובדת.', 'bad');
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+/* ---------------- settings ---------------- */
+function activeModel(){
+  const m = modelEl.value === '__custom' ? customEl.value.trim() : modelEl.value;
+  return m || provider().models[0][0];
+}
+function syncCustom(){ customEl.style.display = modelEl.value === '__custom' ? 'block' : 'none'; }
+
+// Rebuild the model list for the selected provider, restoring whatever was
+// chosen for it last time — including a hand-typed model name.
+function loadProvider(id, remember){
+  providerEl.value = id;
+  const P = provider();
+
+  modelEl.textContent = '';
+  P.models.forEach(pair => {
+    const o = document.createElement('option');
+    o.value = pair[0]; o.textContent = pair[1];
+    modelEl.appendChild(o);
+  });
+  const other = document.createElement('option');
+  other.value = '__custom'; other.textContent = 'מודל אחר…';
+  modelEl.appendChild(other);
+
+  const saved = store.get(LS.model(id), P.models[0][0]);
+  if(Array.prototype.some.call(modelEl.options, o => o.value === saved)){
+    modelEl.value = saved;
+    customEl.value = '';
+  }else{
+    modelEl.value = '__custom';
+    customEl.value = saved;
+  }
+  syncCustom();
+
+  keyEl.value = store.get(LS.key(id), '');
+  el('ai-key-label').textContent = P.keyLabel;
+  keyEl.placeholder = 'הדבק כאן את המפתח';
+  el('ai-refresh').style.display = P.freeList ? 'block' : 'none';
+  el('free-note').style.display = P.freeList ? 'block' : 'none';
+  if(remember) store.set(LS.provider, id);
+}
+
+fixEl.value = store.get(LS.fix, '2');
+loadProvider(store.get(LS.provider, 'anthropic'), false);
+
+providerEl.addEventListener('change', ()=>{
+  loadProvider(providerEl.value, true);
+  if(provider().freeList) refreshModels(false);
+});
+el('ai-refresh').addEventListener('click', ()=> refreshModels(true));
+if(provider().freeList) refreshModels(false);
+const saveKey = ()=> store.set(LS.key(providerEl.value), keyEl.value.trim());
+keyEl.addEventListener('change', saveKey);
+keyEl.addEventListener('blur',   saveKey);
+fixEl.addEventListener('change', ()=> store.set(LS.fix, fixEl.value));
+modelEl.addEventListener('change', ()=>{
+  syncCustom();
+  store.set(LS.model(providerEl.value), activeModel());
+});
+customEl.addEventListener('change', ()=> store.set(LS.model(providerEl.value), activeModel()));
+el('ai-key-show').addEventListener('click', ()=>{
+  const revealing = keyEl.type === 'password';
+  keyEl.type = revealing ? 'text' : 'password';
+  el('ai-key-show').textContent = revealing ? 'הסתר' : 'הצג';
+});
+
+/* ---------------- status line ---------------- */
+function log(msg, kind){
+  logEl.className = kind || '';
+  logEl.textContent = '';
+  if(kind === 'busy'){
+    const s = document.createElement('div');
+    s.className = 'spin';
+    logEl.appendChild(s);
+  }
+  logEl.appendChild(document.createTextNode(msg));
+}
+
+function setBusy(b){
+  [btnNew, btnEdit, btnFix].forEach(x => { x.disabled = b; });
+  btnCancel.style.display = b ? 'block' : 'none';
+}
+
+/* ---------------- API ---------------- */
+// Overload and rate-limit responses are transient by definition — every one of
+// these providers says the same thing: back off and try again. 529 is
+// Anthropic's "overloaded".
+const RETRYABLE = [408, 429, 500, 502, 503, 504, 529];
+const MAX_RETRIES = 4;
+const NET_RETRIES = 2;      // transient blips deserve a retry; a broken setup does not
+const REQUEST_TIMEOUT = 120000;
+
+// A fetch that never resolves leaves the user staring at a spinner, and Safari's
+// own timeout surfaces as the same opaque "Load failed" as a CORS block. Own the
+// deadline so the two can be told apart.
+async function fetchWithTimeout(url, opts, outerSignal){
+  const ac = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(()=>{ timedOut = true; ac.abort(); }, REQUEST_TIMEOUT);
+  const forward = ()=> ac.abort();
+  if(outerSignal){
+    if(outerSignal.aborted) ac.abort();
+    else outerSignal.addEventListener('abort', forward, { once:true });
+  }
+  try{
+    return await fetch(url, Object.assign({}, opts, { signal: ac.signal }));
+  }catch(e){
+    if(timedOut){ const t = new Error('timeout'); t.kind = 'timeout'; throw t; }
+    if(e && e.name === 'AbortError') throw e;
+    // Safari: "Load failed". Chrome: "Failed to fetch". Both are TypeErrors and
+    // both mean the request never reached the server.
+    const n = new Error(e && e.message ? e.message : 'network error');
+    n.kind = 'network';
+    throw n;
+  }finally{
+    clearTimeout(timer);
+    if(outerSignal) outerSignal.removeEventListener('abort', forward);
+  }
+}
+
+// One place that knows about the auth fallback, so both the generate path and
+// the diagnostic report the same verdict for the same key.
+async function authedFetch(url, baseOpts, key, signal){
+  const P = provider();
+  const withHeaders = extra => Object.assign({}, baseOpts,
+    { headers: Object.assign({}, baseOpts.headers, extra) });
+
+  const res = await fetchWithTimeout(url, withHeaders(P.headers(key)), signal);
+  if((res.status === 401 || res.status === 403) && P.authFallback){
+    try{
+      const alt = await fetchWithTimeout(url, withHeaders(P.authFallback(key)), signal);
+      if(alt.ok) return alt;
+    }catch(e){
+      // A blocked preflight here must never mask the real 401 we already hold.
+      if(e.name === 'AbortError') throw e;
+    }
+  }
+  return res;
+}
+
+// Providers report account problems as ordinary API errors in English. Map the
+// common ones to something that says what to actually do about it.
+function hintFor(msg){
+  const m = String(msg || '');
+  if(/credit balance|purchase credits|billing/i.test(m)){
+    return 'אין יתרה ב-API. הוא מחויב בנפרד ממנוי Claude.ai — טען קרדיטים ב-Console תחת Plans & Billing. '
+         + 'אם כבר יש לך יתרה, נסה לייצר מפתח API חדש. בינתיים אפשר להחליף ספק בהגדרות.';
+  }
+  if(/insufficient_quota|exceeded your current quota|billing_hard_limit/i.test(m)){
+    return 'נגמרה המכסה בחשבון. בדוק את החיוב אצל הספק, או החלף ספק בהגדרות.';
+  }
+  if(/invalid.*api.?key|authentication|unauthorized|API key not valid/i.test(m)){
+    return 'המפתח נדחה. ודא שהעתקת אותו במלואו ושהוא שייך לספק שבחרת — לכל ספק מפתח משלו.';
+  }
+  if(/(model).*(not found|does not exist|not supported|invalid)/i.test(m)){
+    return 'שם המודל לא קיים אצל הספק הזה. בחר מודל אחר ברשימה, או תקן את השם ב"מודל אחר".';
+  }
+  if(/rate limit|too many requests/i.test(m)){
+    return 'חרגת ממגבלת הקצב. חכה דקה ונסה שוב.';
+  }
+  return '';
+}
+
+function netMessage(kind){
+  if(kind === 'timeout'){
+    return 'הבקשה נקטעה אחרי ' + (REQUEST_TIMEOUT/1000) + ' שניות בלי תשובה. '
+         + 'נסה מודל מהיר יותר (flash-lite) או תיאור קצר יותר.';
+  }
+  if(typeof navigator !== 'undefined' && navigator.onLine === false){
+    return 'אין חיבור לאינטרנט. הבקשה לא יצאה מהמכשיר.';
+  }
+  if(location.protocol === 'file:'){
+    return 'הבקשה נחסמה כי הדף נפתח כקובץ מקומי (file://), ומשם הדפדפן חוסם קריאות רשת. '
+         + 'הרץ שרת מקומי, למשל: python3 -m http.server, וגש דרך http://localhost:8000';
+  }
+  return 'הבקשה לא יצאה מהמכשיר ("Load failed"). זו לא שגיאה של Gemini אלא של הרשת: '
+       + 'בדוק חיבור, חוסם פרסומות, VPN או Lockdown Mode. לחץ "בדוק חיבור" בהגדרות לאבחון.';
+}
+
+function sleep(ms, signal, onTick){
+  return new Promise((resolve, reject) => {
+    if(signal && signal.aborted){ reject(new DOMException('Aborted','AbortError')); return; }
+    let timer = null, ticker = null;
+    const stop = ()=>{ if(timer) clearTimeout(timer); if(ticker) clearInterval(ticker); };
+    if(onTick){
+      let left = Math.ceil(ms / 1000);
+      onTick(left);
+      ticker = setInterval(()=>{ left = Math.max(left - 1, 0); onTick(left); }, 1000);
+    }
+    timer = setTimeout(()=>{ stop(); resolve(); }, ms);
+    if(signal) signal.addEventListener('abort', ()=>{
+      stop(); reject(new DOMException('Aborted','AbortError'));
+    }, { once:true });
+  });
+}
+
+// Google attaches a RetryInfo hint to the error body. Retry-After lives in a
+// header that CORS won't expose to us, so the body is the only hint we can
+// actually read from a browser.
+function retryDelay(data, attempt){
+  const details = (data && data.error && data.error.details) || [];
+  for(let i = 0; i < details.length; i++){
+    const raw = details[i] && details[i].retryDelay;
+    if(raw){
+      const secs = parseFloat(String(raw).replace('s',''));
+      if(isFinite(secs) && secs > 0) return Math.min(secs * 1000 + 250, 60000);
+    }
+  }
+  return Math.min(1500 * Math.pow(2, attempt), 20000) + Math.random() * 500;
+}
+
+// Models vary wildly in how they wrap code: fenced, unfenced, prose before,
+// explanation after, a throwaway snippet ahead of the real file. Open-weight
+// models like gpt-oss are the worst offenders — the single most common cause of
+// a spurious "won't compile" is prose that reached the compiler. Recover the
+// actual GLSL from any of these shapes.
+function extractShader(raw){
+  if(!raw) return '';
+  let t = raw.replace(/\r\n/g, '\n').trim();
+
+  // 1. Prefer the largest fenced block — a model sometimes shows a tiny snippet
+  // before the full file.
+  const fences = [];
+  const re = /```[ \t]*[a-zA-Z0-9_+-]*[ \t]*\n([\s\S]*?)```/g;
+  let m;
+  while((m = re.exec(t)) !== null) fences.push(m[1]);
+  if(fences.length){
+    fences.sort((a, b) => b.length - a.length);
+    t = fences[0];
+  }
+
+  // 2. Slice leading prose off an unfenced shader, starting at #version — or,
+  // if the model dropped it, at the first line that is unmistakably GLSL.
+  const start = t.search(/^[ \t]*#version\b/m);
+  if(start > 0){
+    t = t.slice(start);
+  }else if(start === -1){
+    const anchor = t.search(/^[ \t]*(#moj_import|out\s+vec4|precision|uniform|void\s+main)\b/m);
+    if(anchor > 0) t = t.slice(anchor);
+  }
+
+  // 3. Drop trailing commentary after the final closing brace of the file,
+  // unless what follows is blank or just comment lines.
+  const lastBrace = t.lastIndexOf('}');
+  if(lastBrace !== -1){
+    const tail = t.slice(lastBrace + 1);
+    if(!/^\s*(\/\/[^\n]*\s*)*$/.test(tail)) t = t.slice(0, lastBrace + 1);
+  }
+
+  // 4. Remove any stray fence markers and a bare "glsl"/"fsh" tag line that
+  // some models emit without backticks.
+  t = t.replace(/```[a-zA-Z0-9_+-]*/g, '');
+  t = t.replace(/^[ \t]*(glsl|fragment|fsh)[ \t]*\n(?=[ \t]*(#version|#moj_import|out\s))/i, '');
+
+  return t.trim();
+}
+
+async function askModel(userText, signal, onRetry){
+  const P = provider();
+  const key = keyEl.value.trim();
+  if(!key) throw new Error('אין מפתח ל-' + P.label + '. פתח את ההגדרות והדבק אותו.');
+
+  const model = activeModel();
+  const url   = P.url(model);
+  const body  = P.body(model, SYSTEM_PROMPT, userText, attachedImages);
+  const send  = ()=> authedFetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify(body)
+  }, key, signal);
+
+  let netFails = 0;
+
+  for(let attempt = 0; ; attempt++){
+    let res;
+    try{
+      res = await send();
+    }catch(e){
+      if(e.name === 'AbortError') throw e;
+      // Retry a blip, but don't waste 20 seconds backing off when the setup is
+      // simply wrong — file:// and offline are not going to fix themselves.
+      const worthRetrying = e.kind === 'network'
+        && netFails < NET_RETRIES
+        && location.protocol !== 'file:'
+        && !(typeof navigator !== 'undefined' && navigator.onLine === false);
+      if(worthRetrying){
+        netFails++;
+        await sleep(1200 * netFails, signal, secs => {
+          if(onRetry) onRetry(netFails, NET_RETRIES, secs, 'הרשת לא הגיבה');
+        });
+        continue;
+      }
+      throw new Error(netMessage(e.kind));
+    }
+
+    const data = await res.json().catch(()=>null);
+
+    if(res.ok){
+      const text = P.extract(data);
+      if(!text || !text.trim()){
+        throw new Error('לא הוחזר קוד (' + (P.stop(data) || 'סיבה לא ידועה') + ').');
+      }
+      return extractShader(text);
+    }
+
+    const msg = (data && data.error && (data.error.message || data.error.type))
+             || (data && data.message) || ('HTTP ' + res.status);
+    const canRetry = RETRYABLE.indexOf(res.status) !== -1;
+
+    if(canRetry && attempt < MAX_RETRIES){
+      await sleep(retryDelay(data, attempt), signal, secs => {
+        if(onRetry) onRetry(attempt + 1, MAX_RETRIES, secs, 'המודל עמוס');
+      });
+      continue;
+    }
+    const hint = hintFor(msg);
+    throw new Error(P.label + ': ' + msg
+      + (hint ? '\n\n' + hint : '')
+      + (!hint && canRetry ? ' — עמוס כרגע. נסה שוב או בחר מודל אחר בהגדרות.' : ''));
+  }
+}
+
+/* ---------------- reference images ---------------- */
+// Phone photos are 12MP; base64 of one is several megabytes and would dominate
+// both the upload time and the token cost. Downscale before it ever leaves here.
+const MAX_IMAGES = 4;
+const MAX_EDGE = 1024;
+const attachedImages = [];
+
+function readImage(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error('לא ניתן לקרוא את התמונה')); };
+    img.src = url;
+  });
+}
+
+async function addImages(files){
+  for(let i = 0; i < files.length; i++){
+    if(attachedImages.length >= MAX_IMAGES){
+      log('אפשר לצרף עד ' + MAX_IMAGES + ' תמונות.', 'bad');
+      break;
+    }
+    if(!/^image\//.test(files[i].type)){ continue; }
+    try{
+      const img = await readImage(files[i]);
+      const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      const dataUrl = c.toDataURL('image/jpeg', 0.85);
+      attachedImages.push({ mime:'image/jpeg', b64: dataUrl.split(',')[1], url: dataUrl });
+    }catch(e){
+      log(e.message, 'bad');
+    }
+  }
+  renderThumbs();
+}
+
+function renderThumbs(){
+  const wrap = el('ai-thumbs');
+  wrap.textContent = '';
+  attachedImages.forEach((im, i) => {
+    const d = document.createElement('div');
+    d.className = 'thumb';
+    const img = document.createElement('img');
+    img.src = im.url;
+    img.alt = 'תמונת השראה ' + (i + 1);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '×';
+    x.setAttribute('aria-label', 'הסר תמונה');
+    x.addEventListener('click', ()=>{ attachedImages.splice(i, 1); renderThumbs(); });
+    d.appendChild(img); d.appendChild(x);
+    wrap.appendChild(d);
+  });
+  el('ai-add-img').textContent = attachedImages.length
+    ? '➕ הוסף עוד (' + attachedImages.length + '/' + MAX_IMAGES + ')'
+    : '➕ הוסף תמונת השראה';
+}
+
+el('ai-add-img').addEventListener('click', ()=> el('ai-img-input').click());
+el('ai-img-input').addEventListener('change', async e => {
+  await addImages(e.target.files);
+  e.target.value = '';   // let the same file be picked again after removal
+});
+
+/* ---------------- diagnostics ---------------- */
+// Three different problems all look identical from the outside: the request
+// never left the device, the key was refused, or the model had no capacity.
+// One cheap ListModels call tells them apart.
+async function diagnose(){
+  const P = provider();
+  const key = keyEl.value.trim();
+  if(!key){ log('אין מפתח להיבדק. הדבק אותו בשדה שמעל.', 'bad'); return; }
+
+  log('בודק את ' + P.label + '…', 'busy');
+
+  // The cheapest possible real call: same host, same auth, one token out.
+  const probe = P.listUrl
+    ? { url: P.listUrl, opts: { method:'GET' } }
+    : { url: P.url(activeModel()), opts: {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify(P.body(activeModel(), 'Reply with the single word: ok', 'ping', []))
+      } };
+
+  let res;
+  try{
+    res = await authedFetch(probe.url, probe.opts, key, null);
+  }catch(e){
+    log('שלב 1 נכשל — ' + netMessage(e.kind), 'bad');
+    return;
+  }
+
+  const data = await res.json().catch(()=>null);
+  if(res.status === 401 || res.status === 403){
+    log('הרשת תקינה, אבל המפתח של ' + P.label + ' נדחה (' + res.status + ').\n\n'
+      + hintFor('invalid api key'), 'bad');
+    return;
+  }
+  if(!res.ok){
+    const msg = (data && data.error && (data.error.message || data.error.type)) || ('HTTP ' + res.status);
+    const hint = hintFor(msg);
+    log('הרשת והמפתח עברו, אבל השרת החזיר: ' + msg + (hint ? '\n\n' + hint : ''), 'bad');
+    return;
+  }
+  log('הרשת והמפתח תקינים. ' + P.label + ' · ' + activeModel());
+}
+
+/* ---------------- prompts ---------------- */
+// The compiler log numbers lines in the *preprocessed* source, which is longer
+// than what the model wrote. Tell it the exact shift so its fix lands on the
+// right line instead of a few lines off.
+function lineOffset(src){
+  try{
+    const pre = toGLSLES300(resolveMojImports(src), true);
+    return pre.split('\n').length - src.split('\n').length;
+  }catch(e){ return 0; }
+}
+
+function newPrompt(desc){
+  return 'Write a Minecraft sky.fsh core shader for this request:\n\n' + desc;
+}
+function editPrompt(desc, src){
+  return 'Here is an existing sky.fsh:\n\n' + src
+       + '\n\nApply this change: ' + desc
+       + '\n\nReturn the complete updated shader. Keep everything the instruction does not ask you to change, and keep the same output contract.';
+}
+function fixPrompt(src, err, offset){
+  return 'This sky.fsh failed to compile in the WebGL2 preview.\n\nCompiler log:\n' + err
+       + '\n\nSource:\n' + src
+       + '\n\nBefore compiling, the preview rewrites "#version 150" to "#version 300 es", inserts a precision qualifier, strips the #moj_import lines and injects the uniform declarations they stand for. Line numbers in the log are therefore about ' + offset + ' higher than in the source above.'
+       + '\n\nReturn the complete corrected shader. Change as little as possible while preserving the visual intent, and keep the same output contract.';
+}
+
+/* ---------------- run ---------------- */
+async function run(mode){
+  const desc = promptEl.value.trim();
+  const current = pasteEl.value.trim();
+
+  if(mode !== 'fix' && !desc){
+    log('כתוב קודם איך השמיים אמורים להיראות.', 'bad');
+    promptEl.focus();
+    return;
+  }
+  if(mode === 'edit' && !current){
+    log('אין שיידר טעון לשנות. לחץ "צור שיידר".', 'bad');
+    return;
+  }
+  if(mode === 'fix' && !current){
+    log('אין קוד לתקן.', 'bad');
+    return;
+  }
+
+  controller = new AbortController();
+  if(window.showSection) window.showSection('sec-ai');
+  setBusy(true);
+  const onRetry = (n, max, secs, why) =>
+    log(why + '. ניסיון חוזר ' + n + '/' + max + ' בעוד ' + secs + ' שנ׳…', 'busy');
+  try{
+    let src;
+    if(mode === 'new'){
+      log('שולח ל-' + activeModel() + '…', 'busy');
+      src = await askModel(newPrompt(desc), controller.signal, onRetry);
+    }else if(mode === 'edit'){
+      log('משנה את השיידר הקיים…', 'busy');
+      src = await askModel(editPrompt(desc, current), controller.signal, onRetry);
+    }else{
+      log('שולח את שגיאת הקימפול לתיקון…', 'busy');
+      src = await askModel(fixPrompt(current, lastCompileError || errBox.textContent, lineOffset(current)), controller.signal, onRetry);
+    }
+
+    let built = tryBuild(src);
+    const maxFix = parseInt(fixEl.value, 10) || 0;
+    for(let i = 1; i <= maxFix && built.err; i++){
+      log('לא התקמפל — ניסיון תיקון ' + i + ' מתוך ' + maxFix + '…', 'busy');
+      src = await askModel(fixPrompt(src, built.err, lineOffset(src)), controller.signal, onRetry);
+      built = tryBuild(src);
+    }
+
+    // Show the code either way — a shader that won't compile is still worth
+    // reading and hand-fixing.
+    pasteEl.value = src;
+    pendingFshText = src;
+    el('tab-paste-fsh').click();
+
+    if(built.prog){
+      installProgram(built.prog, src);
+      saveHistory(mode === 'fix' ? 'תיקון' : desc, src);
+      log('מוכן. ' + src.split('\n').length + ' שורות, רץ עכשיו.');
+    }else{
+      showCompileError(built.err);
+      log('נוצר קוד שלא מתקמפל. הוא בלשונית "קוד" — אפשר לתקן ידנית או לנסות שוב.', 'bad');
+    }
+  }catch(e){
+    if(e.name === 'AbortError') log('בוטל.');
+    else{ log(e.message, 'bad'); console.error(e); }
+  }finally{
+    setBusy(false);
+    controller = null;
+  }
+}
+
+/* ---------------- history ---------------- */
+function loadHistory(){
+  try{ return JSON.parse(store.get(LS.hist, '[]')) || []; }catch(e){ return []; }
+}
+function saveHistory(label, src){
+  const list = loadHistory();
+  list.unshift({ t: Date.now(), label: (label || 'ללא תיאור').slice(0, 60), src });
+  store.set(LS.hist, JSON.stringify(list.slice(0, 12)));
+  renderHistory();
+}
+function renderHistory(){
+  const list = loadHistory();
+  histWrap.style.display = list.length ? 'block' : 'none';
+  histEl.textContent = '';
+  const head = document.createElement('option');
+  head.value = ''; head.textContent = 'טען שיידר קודם…';
+  histEl.appendChild(head);
+  list.forEach((it, i) => {
+    const o = document.createElement('option');
+    const d = new Date(it.t);
+    const hh = String(d.getHours()).padStart(2,'0'), mm = String(d.getMinutes()).padStart(2,'0');
+    o.value = String(i);
+    o.textContent = hh + ':' + mm + ' · ' + it.label;
+    histEl.appendChild(o);
+  });
+}
+
+/* ---------------- wiring ---------------- */
+Array.prototype.forEach.call(document.querySelectorAll('#ai-chips .chip'), c => {
+  c.addEventListener('click', ()=>{ promptEl.value = c.textContent.trim(); promptEl.focus(); });
+});
+btnNew.addEventListener('click', ()=> run('new'));
+btnEdit.addEventListener('click', ()=> run('edit'));
+btnFix.addEventListener('click', ()=> run('fix'));
+btnCancel.addEventListener('click', ()=>{ if(controller) controller.abort(); });
+el('ai-diag').addEventListener('click', ()=> diagnose());
+promptEl.addEventListener('keydown', e => {
+  if((e.metaKey || e.ctrlKey) && e.key === 'Enter'){ e.preventDefault(); run('new'); }
+});
+histEl.addEventListener('change', ()=>{
+  const it = loadHistory()[parseInt(histEl.value, 10)];
+  histEl.value = '';
+  if(!it) return;
+  pasteEl.value = it.src;
+  pendingFshText = it.src;
+  if(tryLoad(it.src)) log('נטען מההיסטוריה.');
+  else log('השיידר הזה כבר לא מתקמפל.', 'bad');
+});
+el('ai-hist-clear').addEventListener('click', ()=>{
+  store.set(LS.hist, '[]');
+  renderHistory();
+  log('ההיסטוריה נוקתה.');
+});
+renderHistory();
+
+})();
+
+window.addEventListener('resize', resize);
+
+if(gl){
+  resize();
+  requestAnimationFrame(render);
+}
+
+// Service worker registration must be over https or localhost — it will
+// silently no-op on file:// or plain http://, which is fine, the app
+// still works fully online in that case, it just won't be installable
+// with offline support until served that way.
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(err=>{
+      console.warn('Service worker registration failed:', err);
+    });
+  });
+}
+
+/* =====================================================================
+   Bottom sheet + section switching
+   On a phone the panel is a draggable sheet over a full-bleed sky. On a
+   desktop the same markup is a static sidebar, so all of this stays inert
+   there — the media query decides, not this code.
+   ===================================================================== */
+(function(){
+  const sheet = document.getElementById('sheet');
+  const grab  = document.getElementById('grab');
+  const segs  = Array.prototype.slice.call(document.querySelectorAll('.seg'));
+  const SNAPS = [0.32, 0.60, 0.90];   // fractions of the viewport
+  let snapIndex = 1;
+
+  // matchMedia is missing in a few embedded WebViews; the width check is the
+  // same condition the stylesheet uses.
+  const isSheet = () => window.matchMedia
+    ? window.matchMedia('(max-width:760px)').matches
+    : window.innerWidth <= 760;
+  const vh = () => window.innerHeight;
+
+  function applyHeight(px){ sheet.style.setProperty('--sheet-h', px + 'px'); }
+  function snapTo(i){
+    snapIndex = Math.max(0, Math.min(SNAPS.length - 1, i));
+    applyHeight(Math.round(SNAPS[snapIndex] * vh()));
+  }
+
+  window.showSection = function(id){
+    document.querySelectorAll('.panel-section').forEach(s => {
+      s.classList.toggle('active', s.id === id);
+    });
+    segs.forEach(b => b.classList.toggle('active', b.dataset.sec === id));
+    const body = document.getElementById('sheet-body');
+    if(body) body.scrollTop = 0;
+    // A section is no use behind a collapsed sheet.
+    if(isSheet() && snapIndex === 0) snapTo(1);
+  };
+
+  segs.forEach(b => b.addEventListener('click', ()=> window.showSection(b.dataset.sec)));
+
+  /* ---- drag ---- */
+  let startY = 0, startH = 0, dragging = false, moved = 0;
+
+  grab.addEventListener('pointerdown', e => {
+    if(!isSheet()) return;
+    dragging = true; moved = 0;
+    startY = e.clientY;
+    startH = sheet.getBoundingClientRect().height;
+    sheet.classList.add('dragging');
+    grab.setPointerCapture(e.pointerId);
+  });
+  grab.addEventListener('pointermove', e => {
+    if(!dragging) return;
+    const dy = startY - e.clientY;
+    moved = Math.max(moved, Math.abs(dy));
+    applyHeight(Math.max(vh() * 0.14, Math.min(vh() * 0.94, startH + dy)));
+  });
+  function endDrag(){
+    if(!dragging) return;
+    dragging = false;
+    sheet.classList.remove('dragging');
+    if(moved < 6){                       // a tap, not a drag: cycle upward
+      snapTo(snapIndex >= SNAPS.length - 1 ? 0 : snapIndex + 1);
+      return;
+    }
+    const frac = sheet.getBoundingClientRect().height / vh();
+    // Dragged well below the smallest snap: treat it as "get out of my way".
+    if(frac < SNAPS[0] * 0.62){ setChrome(true); snapTo(1); return; }
+    let best = 0;
+    for(let i = 1; i < SNAPS.length; i++){
+      if(Math.abs(SNAPS[i] - frac) < Math.abs(SNAPS[best] - frac)) best = i;
+    }
+    snapTo(best);
+  }
+  grab.addEventListener('pointerup', endDrag);
+  grab.addEventListener('pointercancel', endDrag);
+
+  /* ---- focus mode: hide every panel and leave only the sky ---- */
+  const app = document.getElementById('app');
+  function setChrome(hidden){
+    app.classList.toggle('chrome-hidden', !!hidden);
+    if(!hidden && isSheet()) snapTo(snapIndex);
+  }
+  window.setChrome = setChrome;
+  document.getElementById('hide-chrome').addEventListener('click', e => {
+    e.stopPropagation();          // the grab row is also a drag/tap target
+    setChrome(true);
+  });
+  document.getElementById('show-chrome').addEventListener('click', ()=> setChrome(false));
+  window.addEventListener('keydown', e => {
+    if(e.key === 'Escape' || (e.key.toLowerCase() === 'h' && !/^(INPUT|TEXTAREA|SELECT)$/.test((e.target||{}).tagName||''))){
+      setChrome(!app.classList.contains('chrome-hidden'));
+    }
+  });
+
+  window.addEventListener('resize', ()=>{ if(isSheet()) snapTo(snapIndex); });
+
+  // iOS slides the keyboard over fixed elements rather than resizing them, so
+  // a field near the bottom of the sheet ends up underneath it. Nudge whatever
+  // just got focus back into view once the keyboard animation has settled.
+  document.getElementById('sheet').addEventListener('focusin', e => {
+    if(!isSheet()) return;
+    const t = e.target;
+    if(!t || !/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    setTimeout(()=>{
+      try{ t.scrollIntoView({ block:'center', behavior:'smooth' }); }
+      catch(err){ t.scrollIntoView(); }
+    }, 320);
+  });
+
+  if(isSheet()) snapTo(1);
+})();
+
+
+/* =====================================================================
+   Saved collection
+   The AI history rotates after 12 entries. This is the part that doesn't:
+   an explicit shelf, each entry stamped with a thumbnail of how the sky
+   actually looked when it was saved.
+   ===================================================================== */
+(function(){
+  const KEY = 'skyviewer.collection';
+  const grid = document.getElementById('lib-grid');
+  const emptyNote = document.getElementById('lib-empty');
+  const nameEl = document.getElementById('lib-name');
+  const star = document.getElementById('star');
+
+  function read(){
+    try{ return JSON.parse(localStorage.getItem(KEY) || '[]') || []; }
+    catch(e){ return []; }
+  }
+  function write(list){
+    try{
+      localStorage.setItem(KEY, JSON.stringify(list));
+      return true;
+    }catch(e){
+      toast('אין מקום לשמור. מחק כמה פריטים מהאוסף ונסה שוב.', 'bad');
+      return false;
+    }
+  }
+  function toast(msg, kind){
+    const logEl = document.getElementById('ai-log');
+    if(!logEl) return;
+    logEl.className = kind || '';
+    logEl.textContent = msg;
+  }
+
+  // The GL context is created with preserveDrawingBuffer, so the canvas can
+  // still be read after the frame has been presented.
+  function snapshot(){
+    try{
+      const src = document.getElementById('glcanvas');
+      const c = document.createElement('canvas');
+      c.width = 240; c.height = 150;
+      c.getContext('2d').drawImage(src, 0, 0, 240, 150);
+      return c.toDataURL('image/jpeg', 0.72);
+    }catch(e){ return ''; }
+  }
+
+  function currentSource(){
+    const box = document.getElementById('paste-fsh');
+    return (box && box.value.trim()) || '';
+  }
+
+  function save(name){
+    const src = currentSource();
+    if(!src){
+      toast('אין שיידר טעון לשמור.', 'bad');
+      window.showSection('sec-ai');
+      return false;
+    }
+    const list = read();
+    const label = (name || '').trim()
+      || (document.getElementById('ai-prompt').value.trim().slice(0, 48))
+      || ('שיידר ' + new Date().toLocaleDateString('he-IL'));
+    list.unshift({ id: 'c' + Date.now(), name: label, src: src, shot: snapshot(), t: Date.now() });
+    if(!write(list)) return false;
+    render();
+    nameEl.value = '';
+    return true;
+  }
+
+  function render(){
+    const list = read();
+    grid.textContent = '';
+    emptyNote.style.display = list.length ? 'none' : 'block';
+
+    list.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'lib-card';
+
+      const shot = document.createElement('img');
+      shot.className = 'shot';
+      shot.alt = item.name;
+      if(item.shot) shot.src = item.shot;
+      shot.addEventListener('click', ()=> load(item));
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const nm = document.createElement('p');
+      nm.className = 'nm';
+      nm.textContent = item.name;
+
+      const acts = document.createElement('div');
+      acts.className = 'acts';
+
+      const bLoad = document.createElement('button');
+      bLoad.textContent = 'טען';
+      bLoad.addEventListener('click', ()=> load(item));
+
+      const bRename = document.createElement('button');
+      bRename.textContent = 'שם';
+      bRename.addEventListener('click', ()=>{
+        const next = window.prompt('שם חדש:', item.name);
+        if(next === null) return;
+        const list2 = read();
+        const hit = list2.filter(x => x.id === item.id)[0];
+        if(hit){ hit.name = next.trim() || hit.name; write(list2); render(); }
+      });
+
+      const bDel = document.createElement('button');
+      bDel.className = 'del';
+      bDel.textContent = 'מחק';
+      bDel.addEventListener('click', ()=>{
+        if(!window.confirm('למחוק את "' + item.name + '" מהאוסף?')) return;
+        write(read().filter(x => x.id !== item.id));
+        render();
+      });
+
+      acts.appendChild(bLoad); acts.appendChild(bRename); acts.appendChild(bDel);
+      meta.appendChild(nm); meta.appendChild(acts);
+      card.appendChild(shot); card.appendChild(meta);
+      grid.appendChild(card);
+    });
+  }
+
+  function load(item){
+    const box = document.getElementById('paste-fsh');
+    box.value = item.src;
+    if(typeof window.setPendingShader === 'function') window.setPendingShader(item.src);
+    if(tryLoad(item.src)) toast('נטען: ' + item.name);
+    else toast('"' + item.name + '" כבר לא מתקמפל.', 'bad');
+  }
+
+  function download(text, filename, mime){
+    const blob = new Blob([text], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=> URL.revokeObjectURL(a.href), 1000);
+  }
+
+  /* ---- wiring ---- */
+  document.getElementById('lib-save').addEventListener('click', ()=>{
+    if(save(nameEl.value)) window.showSection('sec-lib');
+  });
+  nameEl.addEventListener('keydown', e => { if(e.key === 'Enter') document.getElementById('lib-save').click(); });
+
+  star.addEventListener('click', ()=>{
+    if(!save('')) return;
+    star.classList.add('saved');
+    star.textContent = '★';
+    setTimeout(()=>{ star.classList.remove('saved'); star.textContent = '☆'; }, 1600);
+  });
+
+  document.getElementById('lib-export').addEventListener('click', ()=>{
+    const list = read();
+    if(!list.length){ toast('האוסף ריק.', 'bad'); return; }
+    download(JSON.stringify({ app:'sky-shader-viewer', version:1, items:list }, null, 2),
+      'sky-shaders.json', 'application/json');
+  });
+
+  document.getElementById('lib-import-btn').addEventListener('click', ()=>
+    document.getElementById('lib-import').click());
+
+  document.getElementById('lib-import').addEventListener('change', e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if(!file) return;
+    const r = new FileReader();
+    r.onload = ()=>{
+      try{
+        const parsed = JSON.parse(r.result);
+        const incoming = Array.isArray(parsed) ? parsed : (parsed.items || []);
+        const clean = incoming.filter(x => x && typeof x.src === 'string' && x.src.trim());
+        if(!clean.length){ toast('לא נמצאו שיידרים בקובץ.', 'bad'); return; }
+        const list = read();
+        const known = {};
+        list.forEach(x => { known[x.id] = true; });
+        let added = 0;
+        clean.forEach(x => {
+          const id = x.id && !known[x.id] ? x.id : 'c' + Date.now() + '_' + (added++);
+          if(known[id]) return;
+          known[id] = true;
+          list.unshift({ id: id, name: x.name || 'ללא שם', src: x.src, shot: x.shot || '', t: x.t || Date.now() });
+        });
+        if(write(list)){ render(); toast('יובאו ' + clean.length + ' שיידרים.'); }
+      }catch(err){
+        toast('הקובץ אינו JSON תקין.', 'bad');
+      }
+    };
+    r.readAsText(file);
+  });
+
+  document.getElementById('dl-fsh').addEventListener('click', ()=>{
+    const src = currentSource();
+    if(!src){ toast('אין קוד להורדה.', 'bad'); return; }
+    download(src, 'sky.fsh', 'text/plain');
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
