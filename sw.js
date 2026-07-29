@@ -1,7 +1,7 @@
 // Sky Shader Viewer — offline app shell cache.
 // Bump this on any content change so iOS actually picks up the new
 // version instead of serving the stale cached copy indefinitely.
-const CACHE_NAME = 'sky-viewer-v14';
+const CACHE_NAME = 'sky-viewer-v15';
 
 const APP_SHELL = [
   './index.html',

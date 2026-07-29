@@ -229,6 +229,39 @@
   ::-webkit-scrollbar{ width:8px; } ::-webkit-scrollbar-thumb{ background:var(--haze); border-radius:4px; }
   :focus-visible{ outline:2px solid var(--horizon); outline-offset:2px; }
 
+  /* ---------- export overlay ---------- */
+  #export-overlay{
+    position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
+    padding:24px; background:rgba(4,5,12,.82);
+    backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+  }
+  #export-overlay[hidden]{ display:none; }
+  .export-card{
+    width:100%; max-width:340px; display:flex; flex-direction:column; align-items:center; gap:14px;
+    padding:22px; border-radius:20px;
+    background:linear-gradient(180deg, rgba(19,26,51,.96), rgba(9,12,26,.98));
+    border:1px solid rgba(168,182,240,.14); box-shadow:0 20px 60px rgba(0,0,0,.6);
+  }
+  .export-card::before{
+    content:''; align-self:stretch; height:1.5px; margin:-22px -22px 0; border-radius:20px 20px 0 0;
+    background:var(--sky-line);
+  }
+  .export-title{ margin:2px 0 0; font-size:15px; font-weight:600; letter-spacing:-.2px; }
+  #export-img{
+    width:200px; height:200px; border-radius:14px; display:block;
+    border:1px solid rgba(168,182,240,.18); background:#000;
+    image-rendering:auto;
+    /* The global touch-callout:none (set on body to stop iOS selection popups)
+       also kills the long-press "Save Image" menu. Put it back just here — this
+       is the one image the user is meant to save. */
+    -webkit-touch-callout:default !important;
+    -webkit-user-select:auto !important; user-select:auto !important;
+    touch-action:auto;
+  }
+  .export-hint{ margin:0; font-size:12.5px; color:var(--dim); text-align:center; line-height:1.6; }
+  .export-actions{ align-self:stretch; display:flex; flex-direction:column; gap:8px; }
+  .export-actions .action{ margin-top:0; }
+
   /* ---------- AI panel ---------- */
   #ai-prompt{ min-height:80px; }
   .chips{ display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 0; }
@@ -570,6 +603,19 @@
   </aside>
 
   <button id="show-chrome" aria-label="הצג תפריט">⌃ תפריט</button>
+
+  <div id="export-overlay" hidden>
+    <div class="export-card">
+      <p class="export-title">התמונה מוכנה</p>
+      <img id="export-img" alt="תצוגת השיידר">
+      <p class="export-hint" id="export-hint">לחיצה ארוכה על התמונה ← "שמור תמונה" כדי לשמור לגלריה</p>
+      <div class="export-actions">
+        <button class="action primary" id="export-share" style="display:none;">שיתוף / שמירה</button>
+        <button class="action" id="export-dl">הורדה</button>
+        <button class="action" id="export-close">סגור</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1067,12 +1113,12 @@ document.getElementById('apply-fsh').addEventListener('click', ()=>{
 });
 
 document.getElementById('dl-frame').addEventListener('click', ()=>{
-  canvas.toBlob(blob=>{
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'sky-shader-frame.png';
-    a.click();
-  });
+  if(!program || !hasLoadedShader){
+    const log = document.getElementById('ai-log');
+    if(log){ log.className = 'bad'; log.textContent = 'אין שיידר טעון לייצוא.'; }
+    return;
+  }
+  deliverImage(canvas.toDataURL('image/png'), 'sky-shader-frame.png');
 });
 
 // Export one frame at an exact pixel size, independent of the display size.
@@ -1081,6 +1127,11 @@ document.getElementById('dl-frame').addEventListener('click', ()=>{
 // into the same GL canvas at that size, snapshot it immediately (the context
 // keeps its buffer via preserveDrawingBuffer), then hand the size back to the
 // live loop, which restores itself on its next tick.
+// Turn one rendered frame into an image and deliver it. Desktop browsers
+// download a file directly; iOS Safari silently ignores a programmatic
+// download of a data: URL, so there we show the image in an overlay where the
+// user can long-press to save, and offer the native share sheet when the
+// browser supports sharing files (the reliable route into Photos on iPhone).
 function exportFrame(size){
   if(!program || !hasLoadedShader){
     const log = document.getElementById('ai-log');
@@ -1097,20 +1148,111 @@ function exportFrame(size){
   drawScene(size, size, elapsed);
   // Read before yielding: the browser may clear the drawing buffer once control
   // returns to the event loop, even with preserveDrawingBuffer.
-  const url = canvas.toDataURL('image/png');
+  const dataUrl = canvas.toDataURL('image/png');
 
-  // Hand the canvas back to its real size. resize() in the render loop would
-  // do this anyway, but setting it now avoids a visible one-frame flicker.
   canvas.width = prevW; canvas.height = prevH;
   if(gl) gl.viewport(0, 0, prevW, prevH);
 
+  deliverImage(dataUrl, 'sky-shader-' + size + 'x' + size + '.png');
+}
+
+function dataUrlToBlob(dataUrl){
+  const [head, b64] = dataUrl.split(',');
+  const mime = (head.match(/:(.*?);/) || [])[1] || 'image/png';
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for(let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// A pointer/touch device that can't reliably trigger a download. Covers iOS
+// Safari (incl. iPadOS reporting as Mac) and other mobile WebKit/Chromium.
+function isMobileLike(){
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  return iOS || /Android/.test(ua) || (matchMedia && matchMedia('(pointer:coarse)').matches);
+}
+
+function deliverImage(dataUrl, filename){
+  const overlay = document.getElementById('export-overlay');
+  const img = document.getElementById('export-img');
+  const hint = document.getElementById('export-hint');
+  const shareBtn = document.getElementById('export-share');
+  const dlBtn = document.getElementById('export-dl');
+
+  img.src = dataUrl;
+
+  const blob = dataUrlToBlob(dataUrl);
+  const file = (typeof File !== 'undefined') ? new File([blob], filename, { type: 'image/png' }) : null;
+  const canShareFile = file && navigator.canShare && navigator.canShare({ files: [file] });
+
+  // desktop: a normal download just works, so do that and skip the overlay
+  if(!isMobileLike()){
+    triggerDownload(dataUrl, filename);
+    return;
+  }
+
+  hint.textContent = canShareFile
+    ? 'לחץ "שיתוף / שמירה" ובחר "שמור תמונה", או לחיצה ארוכה על התמונה'
+    : 'לחיצה ארוכה על התמונה ← "שמור תמונה", או לחץ "פתח תמונה" ואז לחיצה ארוכה';
+
+  shareBtn.style.display = canShareFile ? 'block' : 'none';
+  shareBtn.onclick = canShareFile ? async ()=>{
+    try{ await navigator.share({ files: [file], title: 'Sky Shader' }); }
+    catch(e){ /* user cancelled the share sheet — nothing to do */ }
+  } : null;
+
+  // On mobile a direct download is silently ignored, so this button instead
+  // opens the raw image in its own tab. There, iOS shows the full image and a
+  // long-press reliably offers "Save Image" — no app CSS is in the way.
+  dlBtn.textContent = 'פתח תמונה בטאב';
+  dlBtn.onclick = ()=> openImageTab(dataUrl);
+
+  overlay.hidden = false;
+}
+
+// Open just the image, full-bleed on black, in a new tab. Writing an <img> into
+// a fresh document sidesteps the data:-URL navigation limits some iOS versions
+// impose, and nothing there suppresses the long-press Save menu.
+function openImageTab(dataUrl){
+  const win = window.open('', '_blank');
+  if(!win){
+    // popup blocked — fall back to navigating this tab to the image
+    location.href = dataUrl;
+    return;
+  }
+  win.document.write(
+    '<!doctype html><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Sky Shader</title>' +
+    '<style>html,body{margin:0;height:100%;background:#05060c;display:flex;' +
+    'align-items:center;justify-content:center}img{max-width:100%;max-height:100%;' +
+    '-webkit-touch-callout:default}p{position:fixed;bottom:16px;left:0;right:0;' +
+    'text-align:center;color:#8b92b0;font:13px -apple-system,sans-serif;margin:0}</style>' +
+    '<img src="' + dataUrl + '" alt="Sky Shader">' +
+    '<p>לחיצה ארוכה על התמונה ← שמור תמונה</p>'
+  );
+  win.document.close();
+}
+
+function triggerDownload(dataUrl, filename){
   const a = document.createElement('a');
-  a.href = url;
-  a.download = 'sky-shader-' + size + 'x' + size + '.png';
+  a.href = dataUrl;
+  a.download = filename;
+  a.target = '_blank';
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
 }
+
+(function(){
+  const overlay = document.getElementById('export-overlay');
+  const close = ()=>{ overlay.hidden = true; document.getElementById('export-img').src = ''; };
+  document.getElementById('export-close').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
+})();
 
 document.getElementById('dl-200').addEventListener('click', ()=> exportFrame(200));
 
