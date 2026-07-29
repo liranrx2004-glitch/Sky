@@ -554,6 +554,7 @@
 
         <div class="group">
           <button class="action" id="dl-frame">שמור פריים כ-PNG</button>
+          <button class="action" id="dl-200">שמור תמונה 200×200</button>
           <p class="small-note" style="margin-top:14px;">
             ה-uniforms המוזרקים תואמים לצנרת ה-sky core shader הוונילית של Minecraft:
             GameTime, ModelViewMat (סיבוב מצלמה בלבד, ללא הזזה), ScreenSize, ColorModulator, ו-Sampler0
@@ -884,14 +885,22 @@ function render(now){
   gl.viewport(0,0,canvas.width,canvas.height);
 
   if(!program || !hasLoadedShader) return;
-  gl.useProgram(program);
 
   const elapsed = timePaused ? pausedAt : (now-startTime)/1000;
+  drawScene(canvas.width, canvas.height, elapsed);
+}
+
+// One frame of the shader at a given pixel size. The live loop calls it with
+// the canvas size; the exporter calls it with a fixed size into an off-screen
+// target. Everything the shader needs is derived from w/h and the clock, so the
+// same code produces the on-screen view and the saved image identically.
+function drawScene(w, h, elapsed){
+  gl.useProgram(program);
   const speed = parseFloat(document.getElementById('speed').value);
 
   if(U.GameTime) gl.uniform1f(U.GameTime, elapsed / Math.max(speed, 0.0001));
   if(U.ModelViewMat) gl.uniformMatrix4fv(U.ModelViewMat, false, yawPitchToMat4(camYaw, camPitch, camZoom));
-  if(U.ScreenSize) gl.uniform2f(U.ScreenSize, canvas.width, canvas.height);
+  if(U.ScreenSize) gl.uniform2f(U.ScreenSize, w, h);
   if(U.FOV) gl.uniform1f(U.FOV, zoomToFov(camZoom));
   if(U.ColorModulator) gl.uniform4f(U.ColorModulator, 1,1,1,1);
   if(U.FogEnvironmentalStart) gl.uniform1f(U.FogEnvironmentalStart, 0);
@@ -1065,6 +1074,45 @@ document.getElementById('dl-frame').addEventListener('click', ()=>{
     a.click();
   });
 });
+
+// Export one frame at an exact pixel size, independent of the display size.
+// A sky shader reads ScreenSize, so rendering into a 200x200 viewport gives a
+// genuine square image rather than a stretched crop of the wide canvas. We draw
+// into the same GL canvas at that size, snapshot it immediately (the context
+// keeps its buffer via preserveDrawingBuffer), then hand the size back to the
+// live loop, which restores itself on its next tick.
+function exportFrame(size){
+  if(!program || !hasLoadedShader){
+    const log = document.getElementById('ai-log');
+    if(log){ log.className = 'bad'; log.textContent = 'אין שיידר טעון לייצוא.'; }
+    if(window.showSection) window.showSection('sec-ai');
+    return;
+  }
+
+  const prevW = canvas.width, prevH = canvas.height;
+  canvas.width = size; canvas.height = size;
+  gl.viewport(0, 0, size, size);
+
+  const elapsed = timePaused ? pausedAt : (performance.now() - startTime) / 1000;
+  drawScene(size, size, elapsed);
+  // Read before yielding: the browser may clear the drawing buffer once control
+  // returns to the event loop, even with preserveDrawingBuffer.
+  const url = canvas.toDataURL('image/png');
+
+  // Hand the canvas back to its real size. resize() in the render loop would
+  // do this anyway, but setting it now avoids a visible one-frame flicker.
+  canvas.width = prevW; canvas.height = prevH;
+  if(gl) gl.viewport(0, 0, prevW, prevH);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sky-shader-' + size + 'x' + size + '.png';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+document.getElementById('dl-200').addEventListener('click', ()=> exportFrame(200));
 
 /* =====================================================================
    AI shader generation — Google Gemini
