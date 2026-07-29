@@ -229,6 +229,35 @@
   ::-webkit-scrollbar{ width:8px; } ::-webkit-scrollbar-thumb{ background:var(--haze); border-radius:4px; }
   :focus-visible{ outline:2px solid var(--horizon); outline-offset:2px; }
 
+  /* ---------- code tools ---------- */
+  .code-tools{ display:flex; gap:6px; margin-bottom:8px; }
+  .code-tools button{
+    flex:1; min-height:38px; border-radius:10px; border:1px solid var(--haze);
+    background:rgba(32,42,77,.32); color:var(--paper);
+    font-family:inherit; font-size:13.5px; cursor:pointer; padding:0;
+  }
+  .code-tools button:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
+  .code-tools button.danger-tool:hover{ border-color:var(--err); color:var(--err); }
+  .code-tools button:disabled{ opacity:.4; cursor:not-allowed; }
+  .code-tools button.done{ border-color:var(--horizon); color:var(--horizon); }
+  .code-meta{
+    margin:7px 0 0; font-size:11.5px; color:var(--dim); font-family:var(--mono);
+    min-height:14px; letter-spacing:.02em;
+  }
+
+  /* ---------- export size ---------- */
+  .size-presets{ display:flex; gap:6px; }
+  .size-presets button{
+    flex:1; min-height:38px; border-radius:10px; border:1px solid var(--haze);
+    background:transparent; color:var(--dim);
+    font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:0;
+  }
+  .size-presets button:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
+  .size-presets button.on{
+    background:rgba(255,158,94,.14); border-color:var(--horizon); color:var(--horizon);
+  }
+  #exp-square-note{ opacity:.6; }
+
   /* ---------- export overlay ---------- */
   #export-overlay{
     position:fixed; inset:0; z-index:20; display:flex; align-items:center; justify-content:center;
@@ -248,7 +277,8 @@
   }
   .export-title{ margin:2px 0 0; font-size:15px; font-weight:600; letter-spacing:-.2px; }
   #export-img{
-    width:200px; height:200px; border-radius:14px; display:block;
+    width:100%; max-width:240px; aspect-ratio:1/1; height:auto;
+    border-radius:14px; display:block;
     border:1px solid rgba(168,182,240,.18); background:#000;
     image-rendering:auto;
     /* The global touch-callout:none (set on body to stop iOS selection popups)
@@ -549,7 +579,13 @@
             <input type="file" id="file-fsh" accept=".fsh,.glsl,.txt">
           </div>
           <div id="paste-view-fsh" style="display:none;">
+            <div class="code-tools">
+              <button type="button" id="copy-fsh">העתק</button>
+              <button type="button" id="paste-clip">הדבק</button>
+              <button type="button" id="clear-fsh" class="danger-tool">מחק</button>
+            </div>
             <textarea id="paste-fsh" placeholder="הדבק כאן את תוכן sky.fsh..."></textarea>
+            <p class="code-meta" id="code-meta"></p>
           </div>
           <button class="action primary" id="apply-fsh">טען שיידר</button>
           <button class="action" id="dl-fsh">הורד sky.fsh</button>
@@ -587,7 +623,22 @@
 
         <div class="group">
           <button class="action" id="dl-frame">שמור פריים כ-PNG</button>
-          <button class="action" id="dl-200">שמור תמונה 200×200</button>
+
+          <div class="field" style="margin-top:14px;">
+            <label for="exp-size">גודל תמונה מרובעת</label>
+            <div class="size-presets" id="size-presets">
+              <button type="button" data-size="128">128</button>
+              <button type="button" data-size="200" class="on">200</button>
+              <button type="button" data-size="512">512</button>
+              <button type="button" data-size="1024">1024</button>
+            </div>
+            <div class="keyrow" style="margin-top:8px;">
+              <input type="number" id="exp-size" min="16" max="4096" step="1" value="200"
+                     inputmode="numeric" aria-label="גודל בפיקסלים">
+              <button type="button" id="exp-square-note" disabled>px</button>
+            </div>
+          </div>
+          <button class="action primary" id="dl-sized">שמור תמונה <span id="dl-sized-label">200×200</span></button>
           <p class="small-note" style="margin-top:14px;">
             ה-uniforms המוזרקים תואמים לצנרת ה-sky core shader הוונילית של Minecraft:
             GameTime, ModelViewMat (סיבוב מצלמה בלבד, ללא הזזה), ScreenSize, ColorModulator, ו-Sampler0
@@ -1254,7 +1305,115 @@ function triggerDownload(dataUrl, filename){
   overlay.addEventListener('click', e => { if(e.target === overlay) close(); });
 })();
 
-document.getElementById('dl-200').addEventListener('click', ()=> exportFrame(200));
+/* ---------------- export size picker ---------------- */
+(function(){
+  const input = document.getElementById('exp-size');
+  const label = document.getElementById('dl-sized-label');
+  const presets = Array.prototype.slice.call(
+    document.querySelectorAll('#size-presets button'));
+
+  // WebGL has a hard ceiling on renderable size, and it differs per device.
+  // Ask the driver rather than guessing, and leave the UI cap at something
+  // every phone can handle.
+  const MAX = Math.min(4096, (gl && gl.getParameter)
+    ? (gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096) : 4096);
+  input.max = String(MAX);
+
+  function current(){
+    const n = Math.round(parseFloat(input.value));
+    if(!isFinite(n)) return 200;
+    return Math.max(16, Math.min(MAX, n));
+  }
+  function sync(){
+    const n = current();
+    label.textContent = n + '×' + n;
+    presets.forEach(b => b.classList.toggle('on', parseInt(b.dataset.size, 10) === n));
+  }
+  input.addEventListener('input', sync);
+  // Clamp only when the user is done typing — clamping mid-keystroke makes it
+  // impossible to type "1024" (the leading "1" would snap to 16).
+  input.addEventListener('blur', ()=>{ input.value = String(current()); sync(); });
+  presets.forEach(b => b.addEventListener('click', ()=>{
+    input.value = b.dataset.size; sync();
+  }));
+  sync();
+
+  document.getElementById('dl-sized').addEventListener('click', ()=>{
+    input.value = String(current());
+    sync();
+    exportFrame(current());
+  });
+})();
+
+/* ---------------- code tools: copy / paste / clear ---------------- */
+(function(){
+  const box = document.getElementById('paste-fsh');
+  const meta = document.getElementById('code-meta');
+  const copyBtn = document.getElementById('copy-fsh');
+  const pasteBtn = document.getElementById('paste-clip');
+  const clearBtn = document.getElementById('clear-fsh');
+
+  function flash(btn, text){
+    const original = btn.textContent;
+    btn.textContent = text;
+    btn.classList.add('done');
+    setTimeout(()=>{ btn.textContent = original; btn.classList.remove('done'); }, 1400);
+  }
+
+  function updateMeta(){
+    const v = box.value;
+    const empty = !v.trim();
+    copyBtn.disabled = empty;
+    clearBtn.disabled = empty;
+    meta.textContent = empty ? '' :
+      (v.split('\n').length + ' שורות · ' + v.length.toLocaleString('en-US') + ' תווים');
+  }
+  box.addEventListener('input', updateMeta);
+  updateMeta();
+  // The AI and the collection both write here programmatically, which fires no
+  // input event — poll cheaply so the counter and button states stay honest.
+  setInterval(updateMeta, 700);
+
+  copyBtn.addEventListener('click', async ()=>{
+    const text = box.value;
+    if(!text.trim()) return;
+    try{
+      await navigator.clipboard.writeText(text);
+      flash(copyBtn, '✓ הועתק');
+    }catch(e){
+      // iOS refuses clipboard writes outside a trusted gesture in some
+      // contexts; selecting the text lets the user copy with the native menu.
+      box.focus();
+      box.setSelectionRange(0, box.value.length);
+      flash(copyBtn, 'בחר והעתק');
+    }
+  });
+
+  pasteBtn.addEventListener('click', async ()=>{
+    try{
+      const text = await navigator.clipboard.readText();
+      if(!text || !text.trim()){ flash(pasteBtn, 'לוח ריק'); return; }
+      box.value = text;
+      updateMeta();
+      flash(pasteBtn, '✓ הודבק');
+    }catch(e){
+      // Safari only allows reading the clipboard from a paste gesture, so
+      // fall back to putting the caret where a manual paste will land.
+      box.focus();
+      flash(pasteBtn, 'הדבק ידנית');
+    }
+  });
+
+  clearBtn.addEventListener('click', ()=>{
+    if(!box.value.trim()) return;
+    if(!window.confirm('למחוק את הקוד מהתיבה? השיידר שרץ כרגע יישאר על המסך.')) return;
+    box.value = '';
+    if(typeof window.setPendingShader === 'function') window.setPendingShader('');
+    updateMeta();
+    document.getElementById('err-box').style.display = 'none';
+    box.focus();
+  });
+})();
 
 /* =====================================================================
    AI shader generation — Google Gemini
