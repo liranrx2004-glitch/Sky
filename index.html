@@ -248,15 +248,31 @@
   /* ---------- export size ---------- */
   .size-presets{ display:flex; gap:6px; }
   .size-presets button{
-    flex:1; min-height:38px; border-radius:10px; border:1px solid var(--haze);
+    flex:1; min-width:0; min-height:38px; border-radius:10px; border:1px solid var(--haze);
     background:transparent; color:var(--dim);
-    font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:0;
+    font-family:var(--mono); font-size:11px; cursor:pointer; padding:0 2px;
   }
   .size-presets button:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
   .size-presets button.on{
     background:rgba(255,158,94,.14); border-color:var(--horizon); color:var(--horizon);
   }
-  #exp-square-note{ opacity:.6; }
+  .wh-row{ display:flex; align-items:flex-end; gap:6px; margin-top:9px; }
+  .wh-cell{ flex:1; min-width:0; }
+  .wh-cell label{ display:block; font-size:11px; color:var(--dim); margin-bottom:4px; }
+  .wh-cell input{
+    width:100%; min-height:var(--tap); background:rgba(0,0,0,.32);
+    border:1px solid var(--haze); border-radius:11px; color:var(--paper);
+    font-family:var(--mono); font-size:16px; padding:10px; text-align:center;
+    -webkit-user-select:text; user-select:text;
+  }
+  .wh-cell input:focus{ outline:none; border-color:var(--ember); }
+  #exp-lock, #exp-swap{
+    flex-shrink:0; width:40px; min-height:var(--tap); border-radius:11px;
+    border:1px solid var(--haze); background:transparent; color:var(--dim);
+    font-size:15px; cursor:pointer; padding:0;
+  }
+  #exp-lock:hover, #exp-swap:hover{ border-color:rgba(255,158,94,.5); color:var(--horizon); }
+  #exp-lock.on{ background:rgba(255,158,94,.14); border-color:var(--horizon); color:var(--horizon); }
 
   /* ---------- export overlay ---------- */
   #export-overlay{
@@ -602,6 +618,11 @@
             <input type="range" id="speed" min="0" max="4000" step="10" value="1200">
           </div>
           <div class="checkrow"><span>השהה אנימציה</span><input type="checkbox" id="pause"></div>
+          <div class="row" id="scrub-row" style="display:none;">
+            <label>רגע בזמן <span class="val" id="v-scrub">0.0 שנ׳</span></label>
+            <input type="range" id="scrub" min="0" max="600" step="0.1" value="0">
+            <p class="small-note">גרור כדי לבחור בדיוק את הפריים שתרצה לשמור כתמונה.</p>
+          </div>
         </div>
 
         <div class="group">
@@ -625,18 +646,26 @@
           <button class="action" id="dl-frame">שמור פריים כ-PNG</button>
 
           <div class="field" style="margin-top:14px;">
-            <label for="exp-size">גודל תמונה מרובעת</label>
+            <label>גודל התמונה</label>
             <div class="size-presets" id="size-presets">
-              <button type="button" data-size="128">128</button>
-              <button type="button" data-size="200" class="on">200</button>
-              <button type="button" data-size="512">512</button>
-              <button type="button" data-size="1024">1024</button>
+              <button type="button" data-w="200" data-h="200">200²</button>
+              <button type="button" data-w="200" data-h="150">200×150</button>
+              <button type="button" data-w="512" data-h="512">512²</button>
+              <button type="button" data-w="1920" data-h="1080">1920×1080</button>
             </div>
-            <div class="keyrow" style="margin-top:8px;">
-              <input type="number" id="exp-size" min="16" max="4096" step="1" value="200"
-                     inputmode="numeric" aria-label="גודל בפיקסלים">
-              <button type="button" id="exp-square-note" disabled>px</button>
+            <div class="wh-row">
+              <div class="wh-cell">
+                <label for="exp-w">רוחב</label>
+                <input type="number" id="exp-w" min="16" max="4096" step="1" value="200" inputmode="numeric">
+              </div>
+              <button type="button" id="exp-lock" title="נעל יחס" aria-label="נעל יחס">🔗</button>
+              <div class="wh-cell">
+                <label for="exp-h">גובה</label>
+                <input type="number" id="exp-h" min="16" max="4096" step="1" value="200" inputmode="numeric">
+              </div>
+              <button type="button" id="exp-swap" title="החלף" aria-label="החלף רוחב וגובה">⇄</button>
             </div>
+            <p class="small-note" id="exp-note" style="margin-top:8px;"></p>
           </div>
           <button class="action primary" id="dl-sized">שמור תמונה <span id="dl-sized-label">200×200</span></button>
           <p class="small-note" style="margin-top:14px;">
@@ -875,12 +904,40 @@ function installProgram(prog, src){
   cacheUniformLocations();
 }
 
+// The driver reports line numbers against the *preprocessed* source, which is
+// a few lines longer than what the user sees in the code box. Translate back
+// and quote the offending line, so a typo like an invented function name is
+// obvious at a glance instead of being a bare number.
+function annotateError(msg, src){
+  if(!src) return msg;
+  let shift = 0;
+  try{
+    shift = toGLSLES300(resolveMojImports(src), true).split('\n').length - src.split('\n').length;
+  }catch(e){ return msg; }
+
+  const lines = src.split('\n');
+  const seen = {};
+  const extra = [];
+  // GLSL errors look like: ERROR: 0:34: 'muzzle' : undeclared identifier
+  const re = /(?:ERROR|WARNING):\s*\d+:(\d+)/g;
+  let m;
+  while((m = re.exec(msg)) !== null){
+    const reported = parseInt(m[1], 10);
+    const actual = reported - shift;          // 1-based line in the user's file
+    if(!(actual >= 1 && actual <= lines.length)) continue;
+    if(seen[actual]) continue;
+    seen[actual] = true;
+    extra.push('שורה ' + actual + ':  ' + lines[actual - 1].trim());
+  }
+  return extra.length ? msg + '\n\n— בקוד שלך —\n' + extra.join('\n') : msg;
+}
+
 function showCompileError(msg){
   lastCompileError = msg;
   statusDot.classList.remove('ok'); statusDot.classList.add('err');
   statusText.textContent = 'שגיאת קימפול';
   errBox.style.display = 'block';
-  errBox.textContent = msg;
+  errBox.textContent = annotateError(msg, document.getElementById('paste-fsh').value);
   document.getElementById('ai-fix').style.display = 'block';
   console.error(msg);
 }
@@ -1045,6 +1102,20 @@ document.getElementById('pause').addEventListener('change', e=>{
   timePaused = e.target.checked;
   if(timePaused) pausedAt = (performance.now()-startTime)/1000;
   else startTime = performance.now() - pausedAt*1000;
+
+  // Scrubbing only makes sense while the clock is stopped; when it is, seed the
+  // slider from wherever the animation happened to be so the view doesn't jump.
+  const row = document.getElementById('scrub-row');
+  const scrub = document.getElementById('scrub');
+  row.style.display = timePaused ? 'flex' : 'none';
+  if(timePaused){
+    scrub.value = String(Math.min(parseFloat(scrub.max), pausedAt));
+    scrub.dispatchEvent(new Event('input'));
+  }
+});
+document.getElementById('scrub').addEventListener('input', e=>{
+  pausedAt = parseFloat(e.target.value);
+  document.getElementById('v-scrub').textContent = pausedAt.toFixed(1) + ' שנ׳';
 });
 
 // drag / touch to orbit
@@ -1169,7 +1240,8 @@ document.getElementById('dl-frame').addEventListener('click', ()=>{
     if(log){ log.className = 'bad'; log.textContent = 'אין שיידר טעון לייצוא.'; }
     return;
   }
-  deliverImage(canvas.toDataURL('image/png'), 'sky-shader-frame.png');
+  deliverImage(canvas.toDataURL('image/png'), 'sky-shader-frame.png',
+    canvas.width / Math.max(canvas.height, 1));
 });
 
 // Export one frame at an exact pixel size, independent of the display size.
@@ -1183,7 +1255,8 @@ document.getElementById('dl-frame').addEventListener('click', ()=>{
 // download of a data: URL, so there we show the image in an overlay where the
 // user can long-press to save, and offer the native share sheet when the
 // browser supports sharing files (the reliable route into Photos on iPhone).
-function exportFrame(size){
+function exportFrame(w, h){
+  h = h || w;
   if(!program || !hasLoadedShader){
     const log = document.getElementById('ai-log');
     if(log){ log.className = 'bad'; log.textContent = 'אין שיידר טעון לייצוא.'; }
@@ -1192,11 +1265,11 @@ function exportFrame(size){
   }
 
   const prevW = canvas.width, prevH = canvas.height;
-  canvas.width = size; canvas.height = size;
-  gl.viewport(0, 0, size, size);
+  canvas.width = w; canvas.height = h;
+  gl.viewport(0, 0, w, h);
 
   const elapsed = timePaused ? pausedAt : (performance.now() - startTime) / 1000;
-  drawScene(size, size, elapsed);
+  drawScene(w, h, elapsed);
   // Read before yielding: the browser may clear the drawing buffer once control
   // returns to the event loop, even with preserveDrawingBuffer.
   const dataUrl = canvas.toDataURL('image/png');
@@ -1204,7 +1277,7 @@ function exportFrame(size){
   canvas.width = prevW; canvas.height = prevH;
   if(gl) gl.viewport(0, 0, prevW, prevH);
 
-  deliverImage(dataUrl, 'sky-shader-' + size + 'x' + size + '.png');
+  deliverImage(dataUrl, 'sky-shader-' + w + 'x' + h + '.png', w / h);
 }
 
 function dataUrlToBlob(dataUrl){
@@ -1225,9 +1298,11 @@ function isMobileLike(){
   return iOS || /Android/.test(ua) || (matchMedia && matchMedia('(pointer:coarse)').matches);
 }
 
-function deliverImage(dataUrl, filename){
+function deliverImage(dataUrl, filename, aspect){
   const overlay = document.getElementById('export-overlay');
   const img = document.getElementById('export-img');
+  // Preview at the real aspect so a 1920x1080 export doesn't appear square.
+  img.style.aspectRatio = (aspect && isFinite(aspect)) ? String(aspect) : '1 / 1';
   const hint = document.getElementById('export-hint');
   const shareBtn = document.getElementById('export-share');
   const dlBtn = document.getElementById('export-dl');
@@ -1307,41 +1382,100 @@ function triggerDownload(dataUrl, filename){
 
 /* ---------------- export size picker ---------------- */
 (function(){
-  const input = document.getElementById('exp-size');
+  const wEl = document.getElementById('exp-w');
+  const hEl = document.getElementById('exp-h');
   const label = document.getElementById('dl-sized-label');
+  const note = document.getElementById('exp-note');
+  const lock = document.getElementById('exp-lock');
   const presets = Array.prototype.slice.call(
     document.querySelectorAll('#size-presets button'));
 
-  // WebGL has a hard ceiling on renderable size, and it differs per device.
-  // Ask the driver rather than guessing, and leave the UI cap at something
-  // every phone can handle.
+  // WebGL caps how large a frame it can render, and the ceiling differs per
+  // device. Ask the driver instead of guessing.
   const MAX = Math.min(4096, (gl && gl.getParameter)
     ? (gl.getParameter(gl.MAX_TEXTURE_SIZE) || 4096) : 4096);
-  input.max = String(MAX);
+  wEl.max = hEl.max = String(MAX);
 
-  function current(){
-    const n = Math.round(parseFloat(input.value));
-    if(!isFinite(n)) return 200;
-    return Math.max(16, Math.min(MAX, n));
+  const LS_KEY = 'skyviewer.export.size';
+  let locked = false;
+  let ratio = 1;              // width / height, held while the lock is on
+
+  const clamp = v => {
+    const n = Math.round(parseFloat(v));
+    return isFinite(n) ? Math.max(16, Math.min(MAX, n)) : 200;
+  };
+  const rawW = ()=> clamp(wEl.value);
+  const rawH = ()=> clamp(hEl.value);
+
+  function gcd(a, b){ return b ? gcd(b, a % b) : a; }
+  function describe(w, h){
+    const g = gcd(w, h) || 1;
+    const rw = w / g, rh = h / g;
+    // Only show the ratio when it's a recognisable one; 200:150 is 4:3, but
+    // 333:271 reduced is noise.
+    const tidy = (rw <= 32 && rh <= 32) ? '  ·  יחס ' + rw + ':' + rh : '';
+    const mp = (w * h / 1e6);
+    const heavy = (w * h > 4e6) ? '  ·  כבד, עלול לקחת רגע' : '';
+    return w + '×' + h + ' px' + tidy
+      + (mp >= 1 ? '  ·  ' + mp.toFixed(1) + ' מגה-פיקסל' : '') + heavy;
   }
+
   function sync(){
-    const n = current();
-    label.textContent = n + '×' + n;
-    presets.forEach(b => b.classList.toggle('on', parseInt(b.dataset.size, 10) === n));
+    const w = rawW(), h = rawH();
+    label.textContent = w + '×' + h;
+    note.textContent = describe(w, h);
+    presets.forEach(b => b.classList.toggle('on',
+      parseInt(b.dataset.w, 10) === w && parseInt(b.dataset.h, 10) === h));
+    try{ localStorage.setItem(LS_KEY, JSON.stringify({ w: w, h: h })); }catch(e){}
   }
-  input.addEventListener('input', sync);
-  // Clamp only when the user is done typing — clamping mid-keystroke makes it
-  // impossible to type "1024" (the leading "1" would snap to 16).
-  input.addEventListener('blur', ()=>{ input.value = String(current()); sync(); });
+
+  // Clamp on blur, not on every keystroke — otherwise typing "1024" snaps the
+  // leading "1" to 16 and the field becomes unusable.
+  function onInput(which){
+    if(locked){
+      if(which === 'w') hEl.value = String(Math.max(16, Math.min(MAX, Math.round(rawW() / ratio))));
+      else              wEl.value = String(Math.max(16, Math.min(MAX, Math.round(rawH() * ratio))));
+    }
+    sync();
+  }
+  wEl.addEventListener('input', ()=> onInput('w'));
+  hEl.addEventListener('input', ()=> onInput('h'));
+  wEl.addEventListener('blur', ()=>{ wEl.value = String(rawW()); sync(); });
+  hEl.addEventListener('blur', ()=>{ hEl.value = String(rawH()); sync(); });
+
   presets.forEach(b => b.addEventListener('click', ()=>{
-    input.value = b.dataset.size; sync();
+    wEl.value = b.dataset.w; hEl.value = b.dataset.h;
+    ratio = rawW() / rawH();
+    sync();
   }));
+
+  lock.addEventListener('click', ()=>{
+    locked = !locked;
+    ratio = rawW() / Math.max(rawH(), 1);
+    lock.classList.toggle('on', locked);
+    lock.textContent = locked ? '🔒' : '🔗';
+    lock.title = locked ? 'יחס נעול — שחרר' : 'נעל יחס';
+  });
+
+  document.getElementById('exp-swap').addEventListener('click', ()=>{
+    const w = rawW(), h = rawH();
+    wEl.value = String(h); hEl.value = String(w);
+    ratio = h / Math.max(w, 1);
+    sync();
+  });
+
+  // restore the last size used
+  try{
+    const saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+    if(saved && saved.w && saved.h){ wEl.value = String(saved.w); hEl.value = String(saved.h); }
+  }catch(e){}
+  ratio = rawW() / Math.max(rawH(), 1);
   sync();
 
   document.getElementById('dl-sized').addEventListener('click', ()=>{
-    input.value = String(current());
+    wEl.value = String(rawW()); hEl.value = String(rawH());
     sync();
-    exportFrame(current());
+    exportFrame(rawW(), rawH());
   });
 })();
 
@@ -1460,6 +1594,8 @@ HARD RULES. The preview rejects shaders that break these:
 - Write your own hash / noise / fbm helpers inline. Nothing is included for you.
 - Never mix int and float implicitly: write 1.0 not 1, and float(i) for loop counters.
 - Guard every division with max(x, 1e-4). Clamp the final colour to [0,1] and set fragColor.a to 1.0.
+- Use ONLY real GLSL built-ins and functions you define yourself in this same file. Do not invent function names, and do not call anything from a library, an engine, or another shader you remember. Before you finish, re-read your code and confirm that every identifier is either a GLSL built-in (sin, cos, mix, smoothstep, fract, floor, normalize, dot, length, pow, clamp, exp, atan, ...), a uniform listed above, or something you declared earlier in the file. An undeclared identifier is the single most common way these shaders fail.
+- Declare every helper function before the line that calls it. GLSL has no forward declarations by default.
 
 REFERENCE IMAGES:
 If images are attached, treat them as art direction, not as data to sample. Read the palette, the light direction, the time of day, the cloud shapes and the overall mood out of them, and reproduce that procedurally in code. Never try to reproduce the image pixel for pixel — the shader has no access to it at runtime.
